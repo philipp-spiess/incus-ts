@@ -1,0 +1,31 @@
+{
+  "name": "incus-ts",
+  "version": "0.1.0",
+  "description": "Lightweight TypeScript API for Incus",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target=node --format=esm --sourcemap --emit-dce-annotations",
+    "typecheck": "./node_modules/.bin/tsc --noEmit",
+    "test": "bun test ./test",
+    "test:e2e": "INCUS_E2E=1 bun test ./test/incus.integration.test.ts",
+    "check": "bun run typecheck && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "license": "Apache-2.0"
+}
