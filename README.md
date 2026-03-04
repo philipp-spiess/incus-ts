@@ -1,63 +1,161 @@
 # incus-ts
 
-First step of a Bun-first TypeScript port of the Incus Go client.
+Lightweight Bun-first TypeScript client for Incus.
 
-Current status: core runtime is implemented for transport, raw requests, server,
-operations, images, and a practical subset of instance operations. Other
-domains are scaffolded and currently return explicit "not implemented yet"
-errors.
+The API is instance-handle oriented: get a handle with
+`client.instances.instance(name)`, then call `.exec()`, `.setState()`, `.remove()`, etc.
 
-## Goals
+## Mental Model
 
-- Keep setup lightweight (Bun for install/build/test).
-- Preserve Incus Go client capability domains.
-- Provide a Gondolin-like ergonomic TypeScript surface:
-  - static factories (`Incus.connect*`)
-  - grouped resource APIs (`client.instances`, `client.networks`, ...)
-  - chainable context scoping (`client.project(...).target(...)`)
+1. Connect once (`Incus.connect*`).
+2. Use collection APIs for listing/creating (`client.instances.*`).
+3. Use a per-instance handle for day-to-day work (`client.instances.instance(name)`).
 
-## Quick look
+## Quick Start
 
 ```ts
 import { Incus } from "incus-ts";
 
-const client = await Incus.connect("https://incus.example");
+const client = await Incus.connectUnix(); // default: /var/lib/incus/unix.socket
+const instance = client.instances.instance("my-container");
 
-const scoped = client.project("my-project").target("node-1");
+const proc = instance.exec(
+  { command: ["sh", "-lc", "echo hello from incus-ts"], interactive: false },
+  { stdout: "pipe", stderr: "pipe" },
+);
 
-await scoped.instances.list({ type: "container", allProjects: false });
-await scoped.images.aliases.get("alpine/3.20");
-
-const instance = scoped.instances.instance("my-container");
-const proc = instance.exec({ command: ["sh", "-lc", "echo hello"] }, { stdout: "pipe" });
 for await (const chunk of proc) {
   process.stdout.write(new TextDecoder().decode(chunk));
 }
+
 const result = await proc;
-console.log(result.exitCode);
+console.log(result.exitCode, result.ok);
 ```
 
-## Implemented now
+## Common Snippets (From E2E Flow)
 
-- `connection`, `raw`
-- `server`
-- `operations`
-- `images` + `images.aliases` (simple streams remains unimplemented)
-- `instances` collection + per-instance handles (`instances.instance(name)`) for
-  CRUD/state/exec/console/metadata/logs/files with websocket exec stream attach over Unix sockets
+### 1. Create a container (same base image style as e2e/gondolin setup)
 
-## Sketched but not implemented yet
+```ts
+import { Incus } from "incus-ts";
 
-- `certificates`
-- `events`
-- `networks` and nested groups
-- `profiles`, `projects`
-- `storage` and nested groups
-- `cluster`
-- `warnings`
+const client = await Incus.connectUnix();
+const name = `incus-ts-demo-${Date.now().toString(36)}`;
+
+const create = await client.instances.create({
+  name,
+  type: "container",
+  source: {
+    type: "image",
+    mode: "pull",
+    server: "https://images.linuxcontainers.org",
+    protocol: "simplestreams",
+    alias: "alpine/3.20",
+  },
+});
+await create.wait({ timeoutSeconds: 1800 });
+```
+
+### 2. Start it
+
+```ts
+const instance = client.instances.instance(name);
+const start = await instance.setState({ action: "start", timeout: 180 });
+await start.wait({ timeoutSeconds: 240 });
+```
+
+### 3. Stream output while command is running
+
+```ts
+const instance = client.instances.instance(name);
+
+const proc = instance.exec(
+  { command: ["sh", "-lc", "echo stream:1; cat >/dev/null; echo stream:2"], interactive: false },
+  { stdout: "pipe", stderr: "pipe" },
+);
+
+for await (const chunk of proc) {
+  process.stdout.write(new TextDecoder().decode(chunk));
+}
+
+const result = await proc;
+console.log(result.exitCode, result.ok);
+```
+
+### 4. Run a network check inside the container
+
+```ts
+const instance = client.instances.instance(name);
+const decoder = new TextDecoder();
+let stdout = "";
+let stderr = "";
+
+const net = instance.exec(
+  {
+    command: [
+      "sh",
+      "-lc",
+      "GW=$(ip route | awk '/default/ {print $3; exit}'); "
+        + "ping -c 1 -W 2 \"${GW:-192.168.100.1}\" >/tmp/ping.out 2>&1; "
+        + "rc=$?; cat /tmp/ping.out; "
+        + "if [ \"$rc\" -eq 0 ]; then echo __PING_OK__; fi; "
+        + "exit \"$rc\"",
+    ],
+    interactive: false,
+  },
+  { stdout: "pipe", stderr: "pipe" },
+);
+
+const readStdout = (async () => {
+  for await (const chunk of net.stdout) stdout += decoder.decode(chunk, { stream: true });
+  stdout += decoder.decode();
+})();
+const readStderr = (async () => {
+  for await (const chunk of net.stderr) stderr += decoder.decode(chunk, { stream: true });
+  stderr += decoder.decode();
+})();
+
+const netResult = await net;
+await Promise.all([readStdout, readStderr]);
+if (!netResult.ok || !`${stdout}\n${stderr}`.includes("__PING_OK__")) {
+  throw new Error("network check failed");
+}
+```
+
+### 5. Cleanup
+
+```ts
+const instance = client.instances.instance(name);
+
+try {
+  const stop = await instance.setState({ action: "stop", timeout: 30, force: true });
+  await stop.wait({ timeoutSeconds: 60 });
+} catch {
+  // Instance might already be stopped.
+}
+
+const remove = await instance.remove();
+await remove.wait({ timeoutSeconds: 120 });
+client.disconnect();
+```
+
+## Implemented
+
+- `connection`, `raw`, `server`, `operations`
+- `images` + `images.aliases` (simple-streams runtime methods are still scaffolded)
+- `instances` collection + instance handles (`instances.instance(name)`) with:
+  - CRUD/state
+  - `exec` (Unix-socket websocket attach, async streaming, promise-style completion)
+  - `logs`, `files`, `metadata`, `console`
+
+## Still Scaffolded
+
+- `certificates`, `events`
+- `networks`, `profiles`, `projects`
+- `storage`, `cluster`, `warnings`
 - `instances.templates`, `instances.snapshots`, `instances.backups`
 
-## Scripts
+## Bun Scripts
 
 - `bun run typecheck`
 - `bun run test`
