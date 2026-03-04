@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 
 import { Incus, IncusClient, IncusImageClient } from "../src/index";
 import type {
@@ -21,6 +22,7 @@ class FakeTransport implements IncusTransport {
       path: string,
     ) => IncusTransportResponse<unknown> | Promise<IncusTransportResponse<unknown>>
   >();
+  private readonly websocketRoutes = new Map<string, () => WebSocket>();
 
   on(
     method: string,
@@ -32,6 +34,11 @@ class FakeTransport implements IncusTransport {
     ) => IncusTransportResponse<unknown> | Promise<IncusTransportResponse<unknown>>,
   ) {
     this.routes.set(`${method.toUpperCase()} ${path}`, handler);
+  }
+
+  onWebsocket(path: string, socket: WebSocket | (() => WebSocket)) {
+    const factory = typeof socket === "function" ? socket : () => socket;
+    this.websocketRoutes.set(path, factory);
   }
 
   async request<T = unknown>(
@@ -47,6 +54,47 @@ class FakeTransport implements IncusTransport {
 
     return (await route(options, method, path)) as IncusTransportResponse<T>;
   }
+
+  async websocket(path: string): Promise<WebSocket> {
+    const route = this.websocketRoutes.get(path);
+    if (!route) {
+      throw new Error(`Missing fake websocket route for ${path}`);
+    }
+
+    return route();
+  }
+}
+
+class FakeWebSocket {
+  private readonly events = new EventEmitter();
+
+  on(type: string, listener: (...args: unknown[]) => void) {
+    this.events.on(type, listener);
+  }
+
+  off(type: string, listener: (...args: unknown[]) => void) {
+    this.events.off(type, listener);
+  }
+
+  send(_data: unknown) {
+    // No-op for tests.
+  }
+
+  close() {
+    this.events.emit("close");
+  }
+
+  emitMessage(data: Uint8Array | string) {
+    this.events.emit("message", data);
+  }
+
+  emitClose() {
+    this.events.emit("close");
+  }
+
+  emitError(error: Error) {
+    this.events.emit("error", error);
+  }
 }
 
 test("creates a typed Incus client with grouped APIs", async () => {
@@ -55,6 +103,7 @@ test("creates a typed Incus client with grouped APIs", async () => {
   expect(client).toBeInstanceOf(IncusClient);
   expect(client.endpoint).toBe("https://incus.example.internal");
   expect(typeof client.instances.list).toBe("function");
+  expect(typeof client.instances.instance("demo").exec).toBe("function");
   expect(typeof client.networks.zones.records.get).toBe("function");
 
   const scoped = client.project("tenant-a").target("node-2").requireAuthenticated();
@@ -148,4 +197,93 @@ test("raw.query bypasses scoped project/target context", async () => {
   const response = await client.raw.query("GET", "/1.0");
   expect(response.value).toEqual({ api_extensions: ["api_filtering"] });
   expect(transport.calls[0]?.options?.context).toBeUndefined();
+});
+
+test("instances.exec supports pipe streaming with async iterators", async () => {
+  const transport = new FakeTransport();
+  const stdoutSocket = new FakeWebSocket();
+  const stderrSocket = new FakeWebSocket();
+  const decoder = new TextDecoder();
+
+  transport.on("POST", "/1.0/instances/c1/exec", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-exec-1",
+      metadata: {
+        fds: {
+          "1": "sec-out",
+          "2": "sec-err",
+        },
+      },
+    },
+    headers: new Headers(),
+  }));
+  transport.on("GET", "/1.0/operations/op-exec-1/wait", () => ({
+    status: 200,
+    data: {
+      type: "sync",
+      status: "Success",
+      status_code: 200,
+      metadata: {
+        status: "Success",
+        status_code: 200,
+        metadata: {
+          return: 0,
+        },
+      },
+    },
+    headers: new Headers(),
+  }));
+  transport.onWebsocket("/1.0/operations/op-exec-1/websocket?secret=sec-out", () => (
+    stdoutSocket as unknown as WebSocket
+  ));
+  transport.onWebsocket("/1.0/operations/op-exec-1/websocket?secret=sec-err", () => (
+    stderrSocket as unknown as WebSocket
+  ));
+
+  const client = Incus.fromTransport("https://incus.example.internal", transport);
+  const proc = client.instances.instance("c1").exec(
+    { command: ["/bin/sh", "-lc", "echo hi"] },
+    { stdout: "pipe", stderr: "pipe" },
+  );
+
+  const stdoutRead = (async () => {
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of proc) {
+      chunks.push(chunk);
+    }
+
+    return decoder.decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+  })();
+
+  const mergedRead = (async () => {
+    const entries: Array<{ stream: string; text: string }> = [];
+    for await (const entry of proc.output()) {
+      entries.push({ stream: entry.stream, text: decoder.decode(entry.chunk) });
+    }
+
+    return entries;
+  })();
+
+  for (let attempt = 0; attempt < 20 && proc.id.length === 0; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  expect(proc.id).toBe("op-exec-1");
+
+  stdoutSocket.emitMessage(new TextEncoder().encode("hello\n"));
+  stderrSocket.emitMessage(new TextEncoder().encode("oops\n"));
+  stdoutSocket.emitClose();
+  stderrSocket.emitClose();
+
+  const result = await proc;
+  expect(result.ok).toBe(true);
+  expect(result.exitCode).toBe(0);
+  expect(await stdoutRead).toBe("hello\n");
+  expect(await mergedRead).toEqual([
+    { stream: "stdout", text: "hello\n" },
+    { stream: "stderr", text: "oops\n" },
+  ]);
 });

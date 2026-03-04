@@ -258,11 +258,37 @@ export type InstanceListOptions = IncusListOptions & {
 
 export type InstanceExecOptions = {
   stdin?: IncusBinaryInput;
-  stdout?: WritableStream<Uint8Array>;
-  stderr?: WritableStream<Uint8Array>;
+  stdout?: "pipe" | WritableStream<Uint8Array>;
+  stderr?: "pipe" | WritableStream<Uint8Array>;
   signal?: AbortSignal;
   onControl?: (socket: WebSocket) => void;
 };
+
+export type IncusExecOutputChunk = {
+  stream: "stdout" | "stderr";
+  chunk: Uint8Array;
+};
+
+export type IncusExecResult = {
+  operation: IncusRecord;
+  exitCode?: number;
+  ok: boolean;
+};
+
+export interface IncusExecProcess extends
+  IncusOperation,
+  AsyncIterable<Uint8Array>,
+  PromiseLike<IncusExecResult>
+{
+  stdout: AsyncIterable<Uint8Array>;
+  stderr: AsyncIterable<Uint8Array>;
+  output(): AsyncIterable<IncusExecOutputChunk>;
+  waitResult(options?: IncusOperationWaitOptions): Promise<IncusExecResult>;
+  catch<TResult = never>(
+    onRejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null,
+  ): Promise<IncusExecResult | TResult>;
+  finally(onFinally?: (() => void) | null): Promise<IncusExecResult>;
+}
 
 export type InstanceConsoleOptions = {
   terminal?: WebSocket;
@@ -294,47 +320,41 @@ export type InstanceFileResult = {
 };
 
 export interface InstanceLogsApi {
-  list(instanceName: string): Promise<string[]>;
-  get(instanceName: string, filename: string): Promise<ReadableStream<Uint8Array>>;
-  remove(instanceName: string, filename: string): Promise<void>;
-  getConsole(instanceName: string): Promise<ReadableStream<Uint8Array>>;
-  removeConsole(instanceName: string): Promise<void>;
+  list(): Promise<string[]>;
+  get(filename: string): Promise<ReadableStream<Uint8Array>>;
+  remove(filename: string): Promise<void>;
+  getConsole(): Promise<ReadableStream<Uint8Array>>;
+  removeConsole(): Promise<void>;
 }
 
 export interface InstanceFilesApi {
-  get(instanceName: string, path: string): Promise<InstanceFileResult>;
-  put(instanceName: string, path: string, options: InstanceFilePutOptions): Promise<void>;
-  remove(instanceName: string, path: string): Promise<void>;
-  sftp(instanceName: string): Promise<unknown>;
+  get(path: string): Promise<InstanceFileResult>;
+  put(path: string, options: InstanceFilePutOptions): Promise<void>;
+  remove(path: string): Promise<void>;
+  sftp(): Promise<unknown>;
 }
 
 export interface InstanceTemplatesApi {
-  list(instanceName: string): Promise<string[]>;
-  get(instanceName: string, templateName: string): Promise<ReadableStream<Uint8Array>>;
-  put(
-    instanceName: string,
-    templateName: string,
-    content: IncusBinaryInput,
-  ): Promise<void>;
-  remove(instanceName: string, templateName: string): Promise<void>;
+  list(): Promise<string[]>;
+  get(templateName: string): Promise<ReadableStream<Uint8Array>>;
+  put(templateName: string, content: IncusBinaryInput): Promise<void>;
+  remove(templateName: string): Promise<void>;
 }
 
 export interface InstanceSnapshotsApi {
-  names(instanceName: string): Promise<string[]>;
-  list(instanceName: string): Promise<IncusRecord[]>;
-  get(instanceName: string, name: string): Promise<IncusEntity<IncusRecord>>;
-  create(instanceName: string, snapshot: IncusRecord): Promise<IncusOperation>;
+  names(): Promise<string[]>;
+  list(): Promise<IncusRecord[]>;
+  get(name: string): Promise<IncusEntity<IncusRecord>>;
+  create(snapshot: IncusRecord): Promise<IncusOperation>;
   copyFrom(
     source: IncusClient,
-    instanceName: string,
     snapshot: IncusRecord,
     options?: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  rename(instanceName: string, name: string, request: IncusRecord): Promise<IncusOperation>;
-  migrate(instanceName: string, name: string, request: IncusRecord): Promise<IncusOperation>;
-  remove(instanceName: string, name: string): Promise<IncusOperation>;
+  rename(name: string, request: IncusRecord): Promise<IncusOperation>;
+  migrate(name: string, request: IncusRecord): Promise<IncusOperation>;
+  remove(name: string): Promise<IncusOperation>;
   update(
-    instanceName: string,
     name: string,
     snapshot: IncusRecord,
     options?: IncusMutationOptions,
@@ -342,20 +362,55 @@ export interface InstanceSnapshotsApi {
 }
 
 export interface InstanceBackupsApi {
-  names(instanceName: string): Promise<string[]>;
-  list(instanceName: string): Promise<IncusRecord[]>;
-  get(instanceName: string, name: string): Promise<IncusEntity<IncusRecord>>;
-  create(instanceName: string, backup: IncusRecord): Promise<IncusOperation>;
-  rename(instanceName: string, name: string, backup: IncusRecord): Promise<IncusOperation>;
-  remove(instanceName: string, name: string): Promise<IncusOperation>;
-  download(instanceName: string, name: string): Promise<ReadableStream<Uint8Array>>;
-  upload(instanceName: string, backup: IncusRecord, body: IncusBinaryInput): Promise<void>;
+  names(): Promise<string[]>;
+  list(): Promise<IncusRecord[]>;
+  get(name: string): Promise<IncusEntity<IncusRecord>>;
+  create(backup: IncusRecord): Promise<IncusOperation>;
+  rename(name: string, backup: IncusRecord): Promise<IncusOperation>;
+  remove(name: string): Promise<IncusOperation>;
+  download(name: string): Promise<ReadableStream<Uint8Array>>;
+  upload(backup: IncusRecord, body: IncusBinaryInput): Promise<void>;
+}
+
+export interface InstanceApi {
+  readonly name: string;
+  get(options?: { full?: boolean }): Promise<IncusEntity<IncusRecord>>;
+  update(instance: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
+  rename(request: IncusRecord): Promise<IncusOperation>;
+  migrate(request: IncusRecord): Promise<IncusOperation>;
+  remove(): Promise<IncusOperation>;
+  rebuild(request: IncusRecord): Promise<IncusOperation>;
+  rebuildFromImage(
+    source: IncusImageClient,
+    image: IncusRecord,
+    request: IncusRecord,
+  ): Promise<IncusRemoteOperation>;
+  state(): Promise<IncusEntity<IncusRecord>>;
+  setState(state: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
+  access(): Promise<IncusRecord>;
+  exec(request: IncusRecord, options?: InstanceExecOptions): IncusExecProcess;
+  console(
+    request: IncusRecord,
+    options?: InstanceConsoleOptions,
+  ): Promise<IncusOperation>;
+  consoleDynamic(
+    request: IncusRecord,
+    options?: InstanceConsoleOptions,
+  ): Promise<InstanceConsoleDynamicResult>;
+  metadata(): Promise<IncusEntity<IncusRecord>>;
+  updateMetadata(metadata: IncusRecord, options?: IncusMutationOptions): Promise<void>;
+  debugMemory(format?: string): Promise<ReadableStream<Uint8Array>>;
+  logs: InstanceLogsApi;
+  files: InstanceFilesApi;
+  templates: InstanceTemplatesApi;
+  snapshots: InstanceSnapshotsApi;
+  backups: InstanceBackupsApi;
 }
 
 export interface InstancesApi {
   names(options?: InstanceListOptions): Promise<string[] | Record<string, string[]>>;
   list(options?: InstanceListOptions): Promise<IncusRecord[]>;
-  get(name: string, options?: { full?: boolean }): Promise<IncusEntity<IncusRecord>>;
+  instance(name: string): InstanceApi;
   create(instance: IncusRecord): Promise<IncusOperation>;
   createFromImage(
     source: IncusImageClient,
@@ -368,52 +423,7 @@ export interface InstancesApi {
     instance: IncusRecord,
     options?: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  update(
-    name: string,
-    instance: IncusRecord,
-    options?: IncusMutationOptions,
-  ): Promise<IncusOperation>;
-  rename(name: string, request: IncusRecord): Promise<IncusOperation>;
-  migrate(name: string, request: IncusRecord): Promise<IncusOperation>;
-  remove(name: string): Promise<IncusOperation>;
   updateMany(state: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
-  rebuild(name: string, request: IncusRecord): Promise<IncusOperation>;
-  rebuildFromImage(
-    source: IncusImageClient,
-    image: IncusRecord,
-    name: string,
-    request: IncusRecord,
-  ): Promise<IncusRemoteOperation>;
-  state(name: string): Promise<IncusEntity<IncusRecord>>;
-  setState(
-    name: string,
-    state: IncusRecord,
-    options?: IncusMutationOptions,
-  ): Promise<IncusOperation>;
-  access(name: string): Promise<IncusRecord>;
-  exec(name: string, request: IncusRecord, options?: InstanceExecOptions): Promise<IncusOperation>;
-  console(
-    name: string,
-    request: IncusRecord,
-    options?: InstanceConsoleOptions,
-  ): Promise<IncusOperation>;
-  consoleDynamic(
-    name: string,
-    request: IncusRecord,
-    options?: InstanceConsoleOptions,
-  ): Promise<InstanceConsoleDynamicResult>;
-  metadata(name: string): Promise<IncusEntity<IncusRecord>>;
-  updateMetadata(
-    name: string,
-    metadata: IncusRecord,
-    options?: IncusMutationOptions,
-  ): Promise<void>;
-  debugMemory(name: string, format?: string): Promise<ReadableStream<Uint8Array>>;
-  logs: InstanceLogsApi;
-  files: InstanceFilesApi;
-  templates: InstanceTemplatesApi;
-  snapshots: InstanceSnapshotsApi;
-  backups: InstanceBackupsApi;
 }
 
 export interface EventsApi {
@@ -1845,6 +1855,41 @@ function assertOperationSuccess(operation: IncusRecord, source: string): void {
   }
 }
 
+function parseExecExitCode(operation: IncusRecord): number | undefined {
+  const candidates: unknown[] = [
+    operation.return,
+    operation["return-code"],
+    operation.return_code,
+    toRecord(operation.metadata).return,
+    toRecord(operation.metadata)["return-code"],
+    toRecord(operation.metadata).return_code,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+
+    if (typeof candidate === "string" && candidate.length > 0) {
+      const parsed = Number.parseInt(candidate, 10);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function toExecResult(operation: IncusRecord): IncusExecResult {
+  const exitCode = parseExecExitCode(operation);
+  return {
+    operation,
+    exitCode,
+    ok: exitCode === undefined ? true : exitCode === 0,
+  };
+}
+
 function extractExecFds(operationValue: unknown): Record<string, string> {
   const record = toRecord(operationValue);
   const candidates: unknown[] = [
@@ -1971,6 +2016,100 @@ function closeWebSocketSafely(socket: WebSocketLike): void {
   }
 }
 
+type AsyncQueue<T> = {
+  iterable: AsyncIterable<T>;
+  push(value: T): void;
+  close(): void;
+  fail(error: unknown): void;
+  done: Promise<void>;
+};
+
+function createAsyncQueue<T>(): AsyncQueue<T> {
+  const items: T[] = [];
+  const waiters: Array<{
+    resolve: (result: IteratorResult<T>) => void;
+    reject: (reason?: unknown) => void;
+  }> = [];
+  let closed = false;
+  let failure: unknown | undefined;
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+
+  const settleDone = () => {
+    resolveDone();
+  };
+
+  const close = () => {
+    if (closed) {
+      return;
+    }
+
+    closed = true;
+    while (waiters.length > 0) {
+      const waiter = waiters.shift();
+      waiter?.resolve({ done: true, value: undefined as T });
+    }
+    settleDone();
+  };
+
+  const fail = (error: unknown) => {
+    if (closed) {
+      return;
+    }
+
+    failure = error;
+    closed = true;
+    while (waiters.length > 0) {
+      const waiter = waiters.shift();
+      waiter?.reject(error);
+    }
+    settleDone();
+  };
+
+  const push = (value: T) => {
+    if (closed) {
+      return;
+    }
+
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter.resolve({ done: false, value });
+      return;
+    }
+
+    items.push(value);
+  };
+
+  const iterable: AsyncIterable<T> = {
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => {
+          if (items.length > 0) {
+            const value = items.shift();
+            return Promise.resolve({ done: false, value: value as T });
+          }
+
+          if (failure !== undefined) {
+            return Promise.reject(failure);
+          }
+
+          if (closed) {
+            return Promise.resolve({ done: true, value: undefined as T });
+          }
+
+          return new Promise<IteratorResult<T>>((resolve, reject) => {
+            waiters.push({ resolve, reject });
+          });
+        },
+      };
+    },
+  };
+
+  return { iterable, push, close, fail, done };
+}
+
 async function webSocketDataToBytes(data: unknown): Promise<Uint8Array> {
   if (data instanceof Uint8Array) {
     return data;
@@ -1997,14 +2136,23 @@ async function webSocketDataToBytes(data: unknown): Promise<Uint8Array> {
 
 function streamWebSocketToWritable(
   socket: WebSocketLike,
-  output?: WritableStream<Uint8Array>,
-): void {
-  const writer = output?.getWriter();
+  options: {
+    output?: WritableStream<Uint8Array>;
+    onChunk?: (chunk: Uint8Array) => void;
+    onError?: (error: unknown) => void;
+    onClose?: () => void;
+  } = {},
+): Promise<void> {
+  const writer = options.output?.getWriter();
   let writeChain = Promise.resolve();
   let finished = false;
   const detachments: Array<() => void> = [];
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
 
-  const finish = () => {
+  const finish = (error?: unknown) => {
     if (finished) {
       return;
     }
@@ -2014,8 +2162,14 @@ function streamWebSocketToWritable(
       detach();
     }
 
-    if (writer) {
-      void writeChain.finally(async () => {
+    void writeChain.finally(async () => {
+      if (error !== undefined) {
+        options.onError?.(error);
+      } else {
+        options.onClose?.();
+      }
+
+      if (writer) {
         try {
           await writer.close();
         } catch {
@@ -2023,27 +2177,29 @@ function streamWebSocketToWritable(
         }
 
         writer.releaseLock();
-      });
-    }
+      }
+
+      resolveDone();
+    });
   };
 
   detachments.push(
     addWebSocketMessageListener(socket, (data) => {
-      if (!writer) {
-        return;
-      }
-
-      writeChain = writeChain
-        .then(async () => {
-          await writer.write(await webSocketDataToBytes(data));
-        })
-        .catch(() => {
-          // Best effort.
-        });
+      writeChain = writeChain.then(async () => {
+        const bytes = await webSocketDataToBytes(data);
+        options.onChunk?.(bytes);
+        if (writer) {
+          await writer.write(bytes);
+        }
+      }).catch((error) => {
+        finish(error);
+      });
     }),
   );
-  detachments.push(addWebSocketCloseListener(socket, finish));
-  detachments.push(addWebSocketErrorListener(socket, finish));
+  detachments.push(addWebSocketCloseListener(socket, () => finish()));
+  detachments.push(addWebSocketErrorListener(socket, (error) => finish(error)));
+
+  return done;
 }
 
 async function sendToWebSocket(socket: WebSocketLike, data: Uint8Array): Promise<void> {
@@ -2973,12 +3129,29 @@ export class IncusClient extends IncusImageClient {
     });
   }
 
+  private isPipeTarget(target: InstanceExecOptions["stdout"]): target is "pipe" {
+    return target === "pipe";
+  }
+
+  private toWritableTarget(
+    target: InstanceExecOptions["stdout"],
+  ): WritableStream<Uint8Array> | undefined {
+    return this.isPipeTarget(target) ? undefined : target;
+  }
+
   private shouldAttachExecIO(options?: InstanceExecOptions): boolean {
     return Boolean(
       options?.stdin ||
       options?.stdout ||
       options?.stderr ||
       options?.onControl,
+    );
+  }
+
+  private shouldPipeExecIO(options?: InstanceExecOptions): boolean {
+    return Boolean(
+      this.isPipeTarget(options?.stdout) ||
+      this.isPipeTarget(options?.stderr),
     );
   }
 
@@ -3000,11 +3173,24 @@ export class IncusClient extends IncusImageClient {
     request: IncusRecord,
     options?: InstanceExecOptions,
     initialOperationValue?: unknown,
-  ): Promise<void> {
+    hooks: {
+      onStdoutChunk?: (chunk: Uint8Array) => void;
+      onStderrChunk?: (chunk: Uint8Array) => void;
+      onStdoutError?: (error: unknown) => void;
+      onStderrError?: (error: unknown) => void;
+      onStdoutClose?: () => void;
+      onStderrClose?: () => void;
+    } = {},
+  ): Promise<{ hasStdout: boolean; hasStderr: boolean }> {
     const fds = await this.getExecFds(operation, initialOperationValue ?? {});
     if (Object.keys(fds).length === 0) {
-      return;
+      return { hasStdout: false, hasStderr: false };
     }
+
+    const stdoutWritable = this.toWritableTarget(options?.stdout);
+    const stderrWritable = this.toWritableTarget(options?.stderr);
+    let hasStdout = false;
+    let hasStderr = false;
 
     const openChannel = async (name: string): Promise<WebSocketLike | null> => {
       const secret = fds[name];
@@ -3028,19 +3214,25 @@ export class IncusClient extends IncusImageClient {
 
     const controlSocket = await openChannel("control");
     if (controlSocket) {
-      streamWebSocketToWritable(controlSocket);
+      void streamWebSocketToWritable(controlSocket);
       options?.onControl?.(controlSocket as unknown as WebSocket);
     }
 
     if (isInteractiveExecRequest(request)) {
       const interactiveSocket = await openChannel("0");
       if (!interactiveSocket) {
-        return;
+        return { hasStdout: false, hasStderr: false };
       }
 
-      streamWebSocketToWritable(interactiveSocket, options?.stdout);
+      hasStdout = true;
+      void streamWebSocketToWritable(interactiveSocket, {
+        output: stdoutWritable,
+        onChunk: hooks.onStdoutChunk,
+        onError: hooks.onStdoutError,
+        onClose: hooks.onStdoutClose,
+      });
       void writeInputToWebSocket(interactiveSocket, options?.stdin);
-      return;
+      return { hasStdout, hasStderr };
     }
 
     const stdinSocket = await openChannel("0");
@@ -3050,60 +3242,77 @@ export class IncusClient extends IncusImageClient {
 
     const stdoutSocket = await openChannel("1");
     if (stdoutSocket) {
-      streamWebSocketToWritable(stdoutSocket, options?.stdout);
+      hasStdout = true;
+      void streamWebSocketToWritable(stdoutSocket, {
+        output: stdoutWritable,
+        onChunk: hooks.onStdoutChunk,
+        onError: hooks.onStdoutError,
+        onClose: hooks.onStdoutClose,
+      });
     }
 
     const stderrSocket = await openChannel("2");
     if (stderrSocket) {
-      streamWebSocketToWritable(stderrSocket, options?.stderr);
+      hasStderr = true;
+      void streamWebSocketToWritable(stderrSocket, {
+        output: stderrWritable,
+        onChunk: hooks.onStderrChunk,
+        onError: hooks.onStderrError,
+        onClose: hooks.onStderrClose,
+      });
     }
+
+    return { hasStdout, hasStderr };
   }
 
   private createInstancesApi(): InstancesApi {
-    const logs = createApiWithFallback<InstanceLogsApi>("instances.logs", {
-      list: async (instanceName: string) => {
+    const toInstancePath = (instanceName: string) =>
+      `/1.0/instances/${encodeURIComponent(instanceName)}`;
+
+    const createLogsApi = (instanceName: string): InstanceLogsApi => ({
+      list: async () => {
         const result = await this.requestEnvelope<unknown[]>(
           "GET",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/logs`,
+          `${toInstancePath(instanceName)}/logs`,
         );
         return urlsToResourceNames(
           `/instances/${encodeURIComponent(instanceName)}/logs`,
           toStringArray(result.value),
         );
       },
-      get: async (instanceName: string, filename: string) => {
+      get: async (filename: string) => {
         const result = await this.requestBinary(
           "GET",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/logs/${encodeURIComponent(filename)}`,
+          `${toInstancePath(instanceName)}/logs/${encodeURIComponent(filename)}`,
         );
         return toReadableStream(result.value);
       },
-      remove: async (instanceName: string, filename: string) => {
+      remove: async (filename: string) => {
         await this.requestEnvelope(
           "DELETE",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/logs/${encodeURIComponent(filename)}`,
+          `${toInstancePath(instanceName)}/logs/${encodeURIComponent(filename)}`,
         );
       },
-      getConsole: async (instanceName: string) => {
+      getConsole: async () => {
         const result = await this.requestBinary(
           "GET",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/console`,
+          `${toInstancePath(instanceName)}/console`,
         );
         return toReadableStream(result.value);
       },
-      removeConsole: async (instanceName: string) => {
+      removeConsole: async () => {
         await this.requestEnvelope(
           "DELETE",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/console`,
+          `${toInstancePath(instanceName)}/console`,
         );
       },
     });
 
-    const files = createApiWithFallback<InstanceFilesApi>("instances.files", {
-      get: async (instanceName: string, path: string) => {
+    const createFilesApi = (instanceName: string): InstanceFilesApi => ({
+      get: async (path: string) => {
         const response = await this.requestTransport(
           "GET",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/files`,
+          `${toInstancePath(instanceName)}/files`,
           {
             query: { path },
           },
@@ -3150,11 +3359,7 @@ export class IncusClient extends IncusImageClient {
           type: headers.type,
         };
       },
-      put: async (
-        instanceName: string,
-        path: string,
-        options: InstanceFilePutOptions,
-      ) => {
+      put: async (path: string, options: InstanceFilePutOptions) => {
         const headers = new Headers();
         if (options.uid !== undefined) {
           headers.set("X-Incus-uid", String(options.uid));
@@ -3176,28 +3381,374 @@ export class IncusClient extends IncusImageClient {
           headers.set("X-Incus-write", options.writeMode);
         }
 
-        await this.requestEnvelope(
-          "POST",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/files`,
-          {
-            query: { path },
-            body: options.content,
-            headers,
-          },
-        );
+        await this.requestEnvelope("POST", `${toInstancePath(instanceName)}/files`, {
+          query: { path },
+          body: options.content,
+          headers,
+        });
       },
-      remove: async (instanceName: string, path: string) => {
-        await this.requestEnvelope(
-          "DELETE",
-          `/1.0/instances/${encodeURIComponent(instanceName)}/files`,
-          {
-            query: { path },
-          },
-        );
+      remove: async (path: string) => {
+        await this.requestEnvelope("DELETE", `${toInstancePath(instanceName)}/files`, {
+          query: { path },
+        });
       },
       sftp: async () => {
         throw new Error("[Incus.ts] Instance SFTP helper is not implemented yet");
       },
+    });
+
+    const getInstance = async (
+      instanceName: string,
+      options: { full?: boolean } = {},
+    ): Promise<IncusEntity<IncusRecord>> => {
+      const result = await this.requestEnvelope<IncusRecord>(
+        "GET",
+        toInstancePath(instanceName),
+        {
+          query: options.full ? { recursion: 1 } : undefined,
+        },
+      );
+      return { value: toRecord(result.value), etag: result.etag };
+    };
+
+    const updateInstance = async (
+      instanceName: string,
+      instance: IncusRecord,
+      options: IncusMutationOptions = {},
+    ): Promise<IncusOperation> => {
+      return this.createOperationFromRequest("PUT", toInstancePath(instanceName), {
+        body: instance,
+        etag: options.etag,
+      });
+    };
+
+    const renameInstance = async (
+      instanceName: string,
+      request: IncusRecord,
+    ): Promise<IncusOperation> => {
+      return this.createOperationFromRequest("POST", toInstancePath(instanceName), { body: request });
+    };
+
+    const migrateInstance = async (
+      instanceName: string,
+      request: IncusRecord,
+    ): Promise<IncusOperation> => {
+      return this.createOperationFromRequest("POST", toInstancePath(instanceName), { body: request });
+    };
+
+    const removeInstance = async (instanceName: string): Promise<IncusOperation> => {
+      return this.createOperationFromRequest("DELETE", toInstancePath(instanceName));
+    };
+
+    const rebuildInstance = async (
+      instanceName: string,
+      request: IncusRecord,
+    ): Promise<IncusOperation> => {
+      return this.createOperationFromRequest("POST", `${toInstancePath(instanceName)}/rebuild`, {
+        body: request,
+      });
+    };
+
+    const stateInstance = async (instanceName: string): Promise<IncusEntity<IncusRecord>> => {
+      const result = await this.requestEnvelope<IncusRecord>(
+        "GET",
+        `${toInstancePath(instanceName)}/state`,
+      );
+      return { value: toRecord(result.value), etag: result.etag };
+    };
+
+    const setStateInstance = async (
+      instanceName: string,
+      state: IncusRecord,
+      options: IncusMutationOptions = {},
+    ): Promise<IncusOperation> => {
+      return this.createOperationFromRequest("PUT", `${toInstancePath(instanceName)}/state`, {
+        body: state,
+        etag: options.etag,
+      });
+    };
+
+    const accessInstance = async (instanceName: string): Promise<IncusRecord> => {
+      const result = await this.requestEnvelope<IncusRecord>(
+        "GET",
+        `${toInstancePath(instanceName)}/access`,
+      );
+      return toRecord(result.value);
+    };
+
+    const execInstance = (
+      instanceName: string,
+      request: IncusRecord,
+      options?: InstanceExecOptions,
+    ): IncusExecProcess => {
+      const path = `${toInstancePath(instanceName)}/exec`;
+      const body = { ...request };
+      const shouldAttachIO = this.shouldAttachExecIO(options) || this.shouldPipeExecIO(options);
+      if (shouldAttachIO && !hasWaitForWebsocketFlag(body)) {
+        body["wait-for-websocket"] = true;
+      }
+
+      const stdoutPipe = this.isPipeTarget(options?.stdout);
+      const stderrPipe = this.isPipeTarget(options?.stderr);
+      const stdoutQueue = createAsyncQueue<Uint8Array>();
+      const stderrQueue = createAsyncQueue<Uint8Array>();
+      const outputQueue = createAsyncQueue<IncusExecOutputChunk>();
+      let stdoutOpen = stdoutPipe;
+      let stderrOpen = stderrPipe;
+
+      const closeOutputIfDone = () => {
+        if (!stdoutOpen && !stderrOpen) {
+          outputQueue.close();
+        }
+      };
+
+      const closeStdout = () => {
+        if (!stdoutOpen) {
+          return;
+        }
+
+        stdoutOpen = false;
+        stdoutQueue.close();
+        closeOutputIfDone();
+      };
+
+      const closeStderr = () => {
+        if (!stderrOpen) {
+          return;
+        }
+
+        stderrOpen = false;
+        stderrQueue.close();
+        closeOutputIfDone();
+      };
+
+      const failAllQueues = (error: unknown) => {
+        stdoutOpen = false;
+        stderrOpen = false;
+        stdoutQueue.fail(error);
+        stderrQueue.fail(error);
+        outputQueue.fail(error);
+      };
+
+      const operationReady = (async (): Promise<IncusOperation> => {
+        const result = await this.requestEnvelope<IncusRecord>("POST", path, {
+          body,
+          signal: options?.signal,
+        });
+        const operation = this.createOperationFromEnvelopeResult("POST", path, result);
+
+        if (shouldAttachIO) {
+          const attached = await this.attachExecWebsockets(operation, body, options, result.value, {
+            onStdoutChunk: stdoutPipe
+              ? (chunk) => {
+                stdoutQueue.push(chunk);
+                outputQueue.push({ stream: "stdout", chunk });
+              }
+              : undefined,
+            onStderrChunk: stderrPipe
+              ? (chunk) => {
+                stderrQueue.push(chunk);
+                outputQueue.push({ stream: "stderr", chunk });
+              }
+              : undefined,
+            onStdoutError: stdoutPipe
+              ? (error) => {
+                stdoutOpen = false;
+                stdoutQueue.fail(error);
+                closeOutputIfDone();
+              }
+              : undefined,
+            onStderrError: stderrPipe
+              ? (error) => {
+                stderrOpen = false;
+                stderrQueue.fail(error);
+                closeOutputIfDone();
+              }
+              : undefined,
+            onStdoutClose: stdoutPipe ? closeStdout : undefined,
+            onStderrClose: stderrPipe ? closeStderr : undefined,
+          });
+
+          if (stdoutPipe && !attached.hasStdout) {
+            closeStdout();
+          }
+
+          if (stderrPipe && !attached.hasStderr) {
+            closeStderr();
+          }
+        } else {
+          stdoutOpen = false;
+          stderrOpen = false;
+          stdoutQueue.close();
+          stderrQueue.close();
+          outputQueue.close();
+        }
+
+        if (!stdoutPipe) {
+          stdoutOpen = false;
+          stdoutQueue.close();
+        }
+
+        if (!stderrPipe) {
+          stderrOpen = false;
+          stderrQueue.close();
+        }
+
+        closeOutputIfDone();
+
+        return operation;
+      })().catch((error) => {
+        failAllQueues(error);
+        throw error;
+      });
+
+      const waitResult = async (
+        waitOptions: IncusOperationWaitOptions = {},
+      ): Promise<IncusExecResult> => {
+        const operation = await operationReady;
+        const opRecord = await operation.wait(waitOptions);
+        await Promise.all([stdoutQueue.done, stderrQueue.done]);
+        return toExecResult(opRecord);
+      };
+
+      let defaultResultPromise: Promise<IncusExecResult> | undefined;
+      const getDefaultResultPromise = () => {
+        defaultResultPromise ??= waitResult();
+        return defaultResultPromise;
+      };
+
+      let operationId = "";
+      void operationReady.then((operation) => {
+        operationId = operation.id;
+      }).catch(() => {
+        // Best effort.
+      });
+
+      return {
+        get id(): string {
+          return operationId;
+        },
+        wait: (waitOptions: IncusOperationWaitOptions = {}) => (
+          operationReady.then((operation) => operation.wait(waitOptions))
+        ),
+        cancel: () => operationReady.then((operation) => operation.cancel()),
+        refresh: () => operationReady.then((operation) => operation.refresh()),
+        websocket: (secret: string) => operationReady.then((operation) => operation.websocket(secret)),
+        onUpdate: (handler: (operation: IncusRecord) => void) => (
+          operationReady.then((operation) => operation.onUpdate(handler))
+        ),
+        stdout: stdoutQueue.iterable,
+        stderr: stderrQueue.iterable,
+        output: () => outputQueue.iterable,
+        waitResult,
+        then: <TResult1 = IncusExecResult, TResult2 = never>(
+          onFulfilled?: ((value: IncusExecResult) => TResult1 | PromiseLike<TResult1>) | null,
+          onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+        ): Promise<TResult1 | TResult2> => (
+          getDefaultResultPromise().then(onFulfilled, onRejected)
+        ),
+        catch: <TResult = never>(
+          onRejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null,
+        ): Promise<IncusExecResult | TResult> => (
+          getDefaultResultPromise().catch(onRejected)
+        ),
+        finally: (onFinally?: (() => void) | null): Promise<IncusExecResult> => (
+          getDefaultResultPromise().finally(onFinally ?? undefined)
+        ),
+        [Symbol.asyncIterator]: () => stdoutQueue.iterable[Symbol.asyncIterator](),
+      } satisfies IncusExecProcess;
+    };
+
+    const consoleInstance = async (
+      instanceName: string,
+      request: IncusRecord,
+      options?: InstanceConsoleOptions,
+    ): Promise<IncusOperation> => {
+      return this.createOperationFromRequest(
+        "POST",
+        `${toInstancePath(instanceName)}/console`,
+        {
+          body: request,
+          signal: options?.signal,
+        },
+      );
+    };
+
+    const metadataInstance = async (instanceName: string): Promise<IncusEntity<IncusRecord>> => {
+      const result = await this.requestEnvelope<IncusRecord>(
+        "GET",
+        `${toInstancePath(instanceName)}/metadata`,
+      );
+      return { value: toRecord(result.value), etag: result.etag };
+    };
+
+    const updateMetadataInstance = async (
+      instanceName: string,
+      metadata: IncusRecord,
+      options: IncusMutationOptions = {},
+    ): Promise<void> => {
+      await this.requestEnvelope("PUT", `${toInstancePath(instanceName)}/metadata`, {
+        body: metadata,
+        etag: options.etag,
+      });
+    };
+
+    const debugMemoryInstance = async (
+      instanceName: string,
+      format = "elf",
+    ): Promise<ReadableStream<Uint8Array>> => {
+      const result = await this.requestBinary(
+        "GET",
+        `${toInstancePath(instanceName)}/debug/memory`,
+        {
+          query: {
+            format,
+            "instance-type": "virtual-machine",
+          },
+        },
+      );
+      return toReadableStream(result.value);
+    };
+
+    const createInstanceHandle = (instanceName: string): InstanceApi => ({
+      name: instanceName,
+      get: (options = {}) => getInstance(instanceName, options),
+      update: (instance: IncusRecord, options: IncusMutationOptions = {}) => (
+        updateInstance(instanceName, instance, options)
+      ),
+      rename: (request: IncusRecord) => renameInstance(instanceName, request),
+      migrate: (request: IncusRecord) => migrateInstance(instanceName, request),
+      remove: () => removeInstance(instanceName),
+      rebuild: (request: IncusRecord) => rebuildInstance(instanceName, request),
+      rebuildFromImage: async (
+        _source: IncusImageClient,
+        _image: IncusRecord,
+        _request: IncusRecord,
+      ) => createRemoteOperationFromTarget(null),
+      state: () => stateInstance(instanceName),
+      setState: (state: IncusRecord, options: IncusMutationOptions = {}) => (
+        setStateInstance(instanceName, state, options)
+      ),
+      access: () => accessInstance(instanceName),
+      exec: (request: IncusRecord, options?: InstanceExecOptions) => (
+        execInstance(instanceName, request, options)
+      ),
+      console: (request: IncusRecord, options?: InstanceConsoleOptions) => (
+        consoleInstance(instanceName, request, options)
+      ),
+      consoleDynamic: async () => {
+        throw new Error("[Incus.ts] Dynamic console attach is not implemented yet");
+      },
+      metadata: () => metadataInstance(instanceName),
+      updateMetadata: (metadata: IncusRecord, options: IncusMutationOptions = {}) => (
+        updateMetadataInstance(instanceName, metadata, options)
+      ),
+      debugMemory: (format = "elf") => debugMemoryInstance(instanceName, format),
+      logs: createLogsApi(instanceName),
+      files: createFilesApi(instanceName),
+      templates: createNotImplementedProxy(["instances", "templates"]) as InstanceTemplatesApi,
+      snapshots: createNotImplementedProxy(["instances", "snapshots"]) as InstanceSnapshotsApi,
+      backups: createNotImplementedProxy(["instances", "backups"]) as InstanceBackupsApi,
     });
 
     return createApiWithFallback<InstancesApi>("instances", {
@@ -3268,16 +3819,7 @@ export class IncusClient extends IncusImageClient {
         );
         return toRecordArray(result.value);
       },
-      get: async (name: string, options = {}) => {
-        const result = await this.requestEnvelope<IncusRecord>(
-          "GET",
-          `/1.0/instances/${encodeURIComponent(name)}`,
-          {
-            query: options.full ? { recursion: 1 } : undefined,
-          },
-        );
-        return { value: toRecord(result.value), etag: result.etag };
-      },
+      instance: (name: string) => createInstanceHandle(name),
       create: async (instance: IncusRecord) => {
         return this.createOperationFromRequest("POST", "/1.0/instances", { body: instance });
       },
@@ -3294,162 +3836,12 @@ export class IncusClient extends IncusImageClient {
         _instance: IncusRecord,
         _options?: IncusRecord,
       ) => createRemoteOperationFromTarget(null),
-      update: async (
-        name: string,
-        instance: IncusRecord,
-        options: IncusMutationOptions = {},
-      ) => {
-        return this.createOperationFromRequest(
-          "PUT",
-          `/1.0/instances/${encodeURIComponent(name)}`,
-          {
-            body: instance,
-            etag: options.etag,
-          },
-        );
-      },
-      rename: async (name: string, request: IncusRecord) => {
-        return this.createOperationFromRequest(
-          "POST",
-          `/1.0/instances/${encodeURIComponent(name)}`,
-          { body: request },
-        );
-      },
-      migrate: async (name: string, request: IncusRecord) => {
-        return this.createOperationFromRequest(
-          "POST",
-          `/1.0/instances/${encodeURIComponent(name)}`,
-          { body: request },
-        );
-      },
-      remove: async (name: string) => {
-        return this.createOperationFromRequest(
-          "DELETE",
-          `/1.0/instances/${encodeURIComponent(name)}`,
-        );
-      },
       updateMany: async (state: IncusRecord, options: IncusMutationOptions = {}) => {
         return this.createOperationFromRequest("PUT", "/1.0/instances", {
           body: state,
           etag: options.etag,
         });
       },
-      rebuild: async (name: string, request: IncusRecord) => {
-        return this.createOperationFromRequest(
-          "POST",
-          `/1.0/instances/${encodeURIComponent(name)}/rebuild`,
-          { body: request },
-        );
-      },
-      rebuildFromImage: async (
-        _source: IncusImageClient,
-        _image: IncusRecord,
-        _name: string,
-        _request: IncusRecord,
-      ) => createRemoteOperationFromTarget(null),
-      state: async (name: string) => {
-        const result = await this.requestEnvelope<IncusRecord>(
-          "GET",
-          `/1.0/instances/${encodeURIComponent(name)}/state`,
-        );
-        return { value: toRecord(result.value), etag: result.etag };
-      },
-      setState: async (
-        name: string,
-        state: IncusRecord,
-        options: IncusMutationOptions = {},
-      ) => {
-        return this.createOperationFromRequest(
-          "PUT",
-          `/1.0/instances/${encodeURIComponent(name)}/state`,
-          {
-            body: state,
-            etag: options.etag,
-          },
-        );
-      },
-      access: async (name: string) => {
-        const result = await this.requestEnvelope<IncusRecord>(
-          "GET",
-          `/1.0/instances/${encodeURIComponent(name)}/access`,
-        );
-        return toRecord(result.value);
-      },
-      exec: async (name: string, request: IncusRecord, options?: InstanceExecOptions) => {
-        const path = `/1.0/instances/${encodeURIComponent(name)}/exec`;
-        const body = { ...request };
-        const shouldAttachIO = this.shouldAttachExecIO(options);
-        if (shouldAttachIO && !hasWaitForWebsocketFlag(body)) {
-          body["wait-for-websocket"] = true;
-        }
-
-        const result = await this.requestEnvelope<IncusRecord>("POST", path, {
-          body,
-          signal: options?.signal,
-        });
-        const operation = this.createOperationFromEnvelopeResult("POST", path, result);
-        if (shouldAttachIO) {
-          await this.attachExecWebsockets(operation, body, options, result.value);
-        }
-
-        return operation;
-      },
-      console: async (
-        name: string,
-        request: IncusRecord,
-        options?: InstanceConsoleOptions,
-      ) => {
-        return this.createOperationFromRequest(
-          "POST",
-          `/1.0/instances/${encodeURIComponent(name)}/console`,
-          {
-            body: request,
-            signal: options?.signal,
-          },
-        );
-      },
-      consoleDynamic: async () => {
-        throw new Error("[Incus.ts] Dynamic console attach is not implemented yet");
-      },
-      metadata: async (name: string) => {
-        const result = await this.requestEnvelope<IncusRecord>(
-          "GET",
-          `/1.0/instances/${encodeURIComponent(name)}/metadata`,
-        );
-        return { value: toRecord(result.value), etag: result.etag };
-      },
-      updateMetadata: async (
-        name: string,
-        metadata: IncusRecord,
-        options: IncusMutationOptions = {},
-      ) => {
-        await this.requestEnvelope(
-          "PUT",
-          `/1.0/instances/${encodeURIComponent(name)}/metadata`,
-          {
-            body: metadata,
-            etag: options.etag,
-          },
-        );
-      },
-      debugMemory: async (name: string, format = "elf") => {
-        const result = await this.requestBinary(
-          "GET",
-          `/1.0/instances/${encodeURIComponent(name)}/debug/memory`,
-          {
-            query: {
-              format,
-              "instance-type": "virtual-machine",
-            },
-          },
-        );
-        return toReadableStream(result.value);
-      },
-      logs,
-      files,
-      templates: createNotImplementedProxy(["instances", "templates"]) as InstanceTemplatesApi,
-      snapshots: createNotImplementedProxy(["instances", "snapshots"]) as InstanceSnapshotsApi,
-      backups: createNotImplementedProxy(["instances", "backups"]) as InstanceBackupsApi,
     });
   }
 }

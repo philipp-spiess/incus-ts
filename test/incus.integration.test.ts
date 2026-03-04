@@ -6,6 +6,7 @@ import { Incus, IncusApiError, type IncusClient, type IncusRecord } from "../src
 const textDecoder = new TextDecoder();
 const runE2E = process.env.INCUS_E2E === "1";
 const integrationTest = runE2E ? test : test.skip;
+const traceE2E = process.env.INCUS_E2E_TRACE === "1";
 
 type ExecCapture = {
   stdout: string;
@@ -19,12 +20,55 @@ type IncusCommandResult = {
   stderr: string;
 };
 
+type TraceMark = {
+  label: string;
+  startMs: number;
+};
+
+type TraceSpan = {
+  label: string;
+  durationMs: number;
+};
+
 function decodeBytes(bytes?: Uint8Array): string {
   if (!bytes || bytes.byteLength === 0) {
     return "";
   }
 
   return textDecoder.decode(bytes);
+}
+
+function traceStart(label: string): TraceMark {
+  return {
+    label,
+    startMs: performance.now(),
+  };
+}
+
+function traceEnd(spans: TraceSpan[], mark: TraceMark): void {
+  spans.push({
+    label: mark.label,
+    durationMs: performance.now() - mark.startMs,
+  });
+}
+
+function printTrace(spans: TraceSpan[]): void {
+  if (!traceE2E) {
+    return;
+  }
+
+  const phaseSpans = spans.filter((span) => span.label !== "total");
+  const rounded = phaseSpans.map((span) => ({
+    label: span.label,
+    ms: Math.round(span.durationMs),
+  }));
+  const total = rounded.reduce((sum, span) => sum + span.ms, 0);
+
+  console.log("[incus-e2e-trace] phase timings (ms):");
+  for (const span of rounded) {
+    console.log(`[incus-e2e-trace] - ${span.label}: ${span.ms}`);
+  }
+  console.log(`[incus-e2e-trace] - total: ${total}`);
 }
 
 function runIncusCommand(args: string[]): IncusCommandResult {
@@ -91,16 +135,33 @@ function concatChunks(chunks: Uint8Array[]): string {
   return textDecoder.decode(out);
 }
 
-function makeCaptureStream(
+function makeCaptureSink(
   chunks: Uint8Array[],
   onChunk?: () => void,
-): WritableStream<Uint8Array> {
-  return new WritableStream<Uint8Array>({
-    write(chunk) {
-      chunks.push(chunk.slice());
-      onChunk?.();
-    },
+): {
+  stream: WritableStream<Uint8Array>;
+  done: Promise<void>;
+} {
+  let resolveDone: (() => void) | undefined;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
   });
+
+  return {
+    stream: new WritableStream<Uint8Array>({
+      write(chunk) {
+        chunks.push(chunk.slice());
+        onChunk?.();
+      },
+      close() {
+        resolveDone?.();
+      },
+      abort() {
+        resolveDone?.();
+      },
+    }),
+    done,
+  };
 }
 
 async function withTimeout<T>(
@@ -133,7 +194,7 @@ function sleep(ms: number): Promise<void> {
 
 async function instanceExists(client: IncusClient, name: string): Promise<boolean> {
   try {
-    await client.instances.get(name);
+    await client.instances.instance(name).get();
     return true;
   } catch (error) {
     if (error instanceof IncusApiError && error.status === 404) {
@@ -220,22 +281,26 @@ async function execAndCapture(
 ): Promise<ExecCapture> {
   const stdoutChunks: Uint8Array[] = [];
   const stderrChunks: Uint8Array[] = [];
-  const stdout = makeCaptureStream(stdoutChunks);
-  const stderr = makeCaptureStream(stderrChunks);
+  const stdoutCapture = makeCaptureSink(stdoutChunks);
+  const stderrCapture = makeCaptureSink(stderrChunks);
 
-  const operation = await client.instances.exec(
-    instanceName,
+  const operation = client.instances.instance(instanceName).exec(
     {
       command,
       interactive: false,
     },
     {
-      stdout,
-      stderr,
+      stdout: stdoutCapture.stream,
+      stderr: stderrCapture.stream,
     },
   );
 
   const result = await operation.wait({ timeoutSeconds });
+  await withTimeout(
+    Promise.all([stdoutCapture.done, stderrCapture.done]).then(() => {}),
+    5_000,
+    "exec output stream flush",
+  );
   return {
     stdout: concatChunks(stdoutChunks),
     stderr: concatChunks(stderrChunks),
@@ -246,6 +311,9 @@ async function execAndCapture(
 integrationTest(
   "e2e: creates instance, validates streaming exec output, makes network call, and cleans up",
   async () => {
+    const traceSpans: TraceSpan[] = [];
+    const totalTrace = traceStart("total");
+
     const socketPath = detectIncusSocketPath();
     if (!socketPath) {
       throw new Error(
@@ -264,15 +332,19 @@ integrationTest(
 
     let created = false;
     try {
+      const createTrace = traceStart("createContainer");
       const imageLabel = await createContainer(client, instanceName);
+      traceEnd(traceSpans, createTrace);
       created = true;
       expect(imageLabel.length).toBeGreaterThan(0);
 
-      const startOperation = await client.instances.setState(instanceName, {
+      const startTrace = traceStart("startContainer");
+      const startOperation = await client.instances.instance(instanceName).setState({
         action: "start",
         timeout: 180,
       });
       await startOperation.wait({ timeoutSeconds: 240 });
+      traceEnd(traceSpans, startTrace);
 
       const streamingChunks: Uint8Array[] = [];
       let firstChunkSeen = false;
@@ -280,46 +352,66 @@ integrationTest(
       const firstChunkPromise = new Promise<void>((resolve) => {
         resolveFirstChunk = resolve;
       });
-      const streamingStdout = makeCaptureStream(streamingChunks, () => {
-        if (!firstChunkSeen) {
-          firstChunkSeen = true;
-          resolveFirstChunk?.();
-        }
+      let stdinController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const gatedStdin = new ReadableStream<Uint8Array>({
+        start(controller) {
+          stdinController = controller;
+        },
       });
-      const streamingStderr = makeCaptureStream(streamingChunks);
 
-      const streamingOperation = await client.instances.exec(
-        instanceName,
+      const streamStartTrace = traceStart("streamExec.startAndAttach");
+      const streamingOperation = client.instances.instance(instanceName).exec(
         {
-          command: ["sh", "-lc", "for i in 1 2; do echo stream:$i; sleep 1; done"],
+          command: ["sh", "-lc", "echo stream:1; cat >/dev/null; echo stream:2"],
           interactive: false,
         },
         {
-          stdout: streamingStdout,
-          stderr: streamingStderr,
+          stdin: gatedStdin,
+          stdout: "pipe",
+          stderr: "pipe",
         },
       );
+      traceEnd(traceSpans, streamStartTrace);
+
+      const consumeStreamTrace = traceStart("streamExec.consumeStdout");
+      const stdoutConsume = (async () => {
+        for await (const chunk of streamingOperation) {
+          streamingChunks.push(chunk);
+          if (!firstChunkSeen) {
+            firstChunkSeen = true;
+            resolveFirstChunk?.();
+          }
+        }
+      })();
 
       let operationDone = false;
-      const waitForStreamingCommand = streamingOperation.wait({ timeoutSeconds: 180 }).then((op) => {
+      const waitForStreamingCommand = streamingOperation.waitResult({ timeoutSeconds: 180 }).then((op) => {
         operationDone = true;
         return op;
       });
 
+      const firstChunkTrace = traceStart("streamExec.waitFirstChunk");
       await withTimeout(firstChunkPromise, 15_000, "the first streamed chunk");
+      traceEnd(traceSpans, firstChunkTrace);
       expect(operationDone).toBe(false);
+      stdinController?.close();
 
+      const waitDoneTrace = traceStart("streamExec.waitDone");
       const streamingResult = await withTimeout(
         waitForStreamingCommand,
         180_000,
         "the streamed command completion",
       );
-      expect(typeof streamingResult.status).toBe("string");
+      traceEnd(traceSpans, waitDoneTrace);
+      await withTimeout(stdoutConsume, 5_000, "stdout stream consume");
+      traceEnd(traceSpans, consumeStreamTrace);
+      expect(streamingResult.ok).toBe(true);
 
       const streamedText = concatChunks(streamingChunks);
       expect(streamedText).toContain("stream:1");
       expect(streamedText).toContain("stream:2");
 
+      const networkTrace = traceStart("networkExec");
       const network = await execAndCapture(
         client,
         instanceName,
@@ -328,19 +420,27 @@ integrationTest(
           "-lc",
           "udhcpc -i eth0 -q -n >/dev/null 2>&1 || true; "
             + "GW=$(ip route | awk '/default/ {print $3; exit}'); "
-            + "ping -c 1 -W 2 \"${GW:-192.168.100.1}\"",
+            + "ping -c 1 -W 2 \"${GW:-192.168.100.1}\" >/tmp/ping.out 2>&1; "
+            + "rc=$?; cat /tmp/ping.out; "
+            + "if [ \"$rc\" -eq 0 ]; then echo __PING_OK__; fi; "
+            + "exit \"$rc\"",
         ],
         180,
       );
+      traceEnd(traceSpans, networkTrace);
       const networkOutput = `${network.stdout}\n${network.stderr}`;
-      expect(networkOutput).toContain("1 packets transmitted");
-      expect(networkOutput).toMatch(/1 packets received|1 received/);
+      expect(networkOutput).toContain("__PING_OK__");
     } finally {
+      const cleanupTrace = traceStart("cleanup.forceDelete");
       if (created) {
         await forceDeleteInstance(client, instanceName);
       }
+      traceEnd(traceSpans, cleanupTrace);
 
       client.disconnect();
+
+      traceEnd(traceSpans, totalTrace);
+      printTrace(traceSpans);
     }
   },
   20 * 60_000,

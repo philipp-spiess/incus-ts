@@ -27,6 +27,14 @@ const scoped = client.project("my-project").target("node-1");
 
 await scoped.instances.list({ type: "container", allProjects: false });
 await scoped.images.aliases.get("alpine/3.20");
+
+const instance = scoped.instances.instance("my-container");
+const proc = instance.exec({ command: ["sh", "-lc", "echo hello"] }, { stdout: "pipe" });
+for await (const chunk of proc) {
+  process.stdout.write(new TextDecoder().decode(chunk));
+}
+const result = await proc;
+console.log(result.exitCode);
 ```
 
 ## Implemented now
@@ -35,8 +43,8 @@ await scoped.images.aliases.get("alpine/3.20");
 - `server`
 - `operations`
 - `images` + `images.aliases` (simple streams remains unimplemented)
-- `instances` core CRUD/state/exec/console/metadata + `instances.logs` + `instances.files`
-  with websocket exec stream attach over Unix sockets
+- `instances` collection + per-instance handles (`instances.instance(name)`) for
+  CRUD/state/exec/console/metadata/logs/files with websocket exec stream attach over Unix sockets
 
 ## Sketched but not implemented yet
 
