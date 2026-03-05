@@ -2,6 +2,14 @@
   "name": "incus-ts",
   "version": "0.1.1",
   "description": "Lightweight TypeScript API for Incus",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/philipp-spiess/incus-ts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/philipp-spiess/incus-ts/issues"
+  },
+  "homepage": "https://github.com/philipp-spiess/incus-ts#readme",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
