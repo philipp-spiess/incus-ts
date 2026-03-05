@@ -137,6 +137,13 @@ export interface IncusOperation {
   onUpdate(handler: (operation: IncusRecord) => void): Promise<() => void>;
 }
 
+export interface IncusAwaitableOperation extends IncusOperation, PromiseLike<IncusRecord> {
+  catch<TResult = never>(
+    onRejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null,
+  ): Promise<IncusRecord | TResult>;
+  finally(onFinally?: (() => void) | null): Promise<IncusRecord>;
+}
+
 export interface IncusRemoteOperation {
   wait(options?: IncusOperationWaitOptions): Promise<void>;
   cancelTarget(): Promise<void>;
@@ -188,7 +195,7 @@ export interface CertificatesApi {
     options?: IncusMutationOptions,
   ): Promise<void>;
   remove(fingerprint: string): Promise<void>;
-  createToken(certificate: IncusRecord): Promise<IncusOperation>;
+  createToken(certificate: IncusRecord): IncusAwaitableOperation;
 }
 
 export type ImageListOptions = IncusListOptions;
@@ -233,7 +240,7 @@ export interface ImagesApi {
     fingerprint: string,
     options?: ImageDownloadOptions,
   ): Promise<ImageDownloadResult>;
-  create(image: IncusRecord, upload?: IncusRecord): Promise<IncusOperation>;
+  create(image: IncusRecord, upload?: IncusRecord): IncusAwaitableOperation;
   copyFrom(
     source: IncusImageClient,
     image: IncusRecord,
@@ -244,10 +251,10 @@ export interface ImagesApi {
     image: IncusRecord,
     options?: IncusMutationOptions,
   ): Promise<void>;
-  remove(fingerprint: string): Promise<IncusOperation>;
-  refresh(fingerprint: string): Promise<IncusOperation>;
-  createSecret(fingerprint: string): Promise<IncusOperation>;
-  export(fingerprint: string, request?: IncusRecord): Promise<IncusOperation>;
+  remove(fingerprint: string): IncusAwaitableOperation;
+  refresh(fingerprint: string): IncusAwaitableOperation;
+  createSecret(fingerprint: string): IncusAwaitableOperation;
+  export(fingerprint: string, request?: IncusRecord): IncusAwaitableOperation;
   aliases: ImageAliasesApi;
 }
 
@@ -355,30 +362,30 @@ export interface InstanceSnapshotsApi {
   names(): Promise<string[]>;
   list(): Promise<IncusRecord[]>;
   get(name: string): Promise<IncusEntity<IncusRecord>>;
-  create(snapshot: IncusRecord): Promise<IncusOperation>;
+  create(snapshot: IncusRecord): IncusAwaitableOperation;
   copyFrom(
     source: IncusClient,
     snapshot: IncusRecord,
     options?: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  rename(name: string, request: IncusRecord): Promise<IncusOperation>;
-  migrate(name: string, request: IncusRecord): Promise<IncusOperation>;
-  remove(name: string): Promise<IncusOperation>;
+  rename(name: string, request: IncusRecord): IncusAwaitableOperation;
+  migrate(name: string, request: IncusRecord): IncusAwaitableOperation;
+  remove(name: string): IncusAwaitableOperation;
   update(
     name: string,
     snapshot: IncusRecord,
     options?: IncusMutationOptions,
-  ): Promise<IncusOperation>;
-  restore(name: string, options?: { stateful?: boolean }): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
+  restore(name: string, options?: { stateful?: boolean }): IncusAwaitableOperation;
 }
 
 export interface InstanceBackupsApi {
   names(): Promise<string[]>;
   list(): Promise<IncusRecord[]>;
   get(name: string): Promise<IncusEntity<IncusRecord>>;
-  create(backup: IncusRecord): Promise<IncusOperation>;
-  rename(name: string, backup: IncusRecord): Promise<IncusOperation>;
-  remove(name: string): Promise<IncusOperation>;
+  create(backup: IncusRecord): IncusAwaitableOperation;
+  rename(name: string, backup: IncusRecord): IncusAwaitableOperation;
+  remove(name: string): IncusAwaitableOperation;
   download(name: string): Promise<ReadableStream<Uint8Array>>;
   upload(backup: IncusRecord, body: IncusBinaryInput): Promise<void>;
 }
@@ -386,26 +393,26 @@ export interface InstanceBackupsApi {
 export interface InstanceApi {
   readonly name: string;
   get(options?: { full?: boolean }): Promise<IncusEntity<IncusRecord>>;
-  fork(name: string, options?: InstanceForkOptions): Promise<IncusOperation>;
-  update(instance: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
-  rename(request: IncusRecord): Promise<IncusOperation>;
-  migrate(request: IncusRecord): Promise<IncusOperation>;
-  remove(): Promise<IncusOperation>;
-  rebuild(request: IncusRecord): Promise<IncusOperation>;
+  fork(name: string, options?: InstanceForkOptions): IncusAwaitableOperation;
+  update(instance: IncusRecord, options?: IncusMutationOptions): IncusAwaitableOperation;
+  rename(request: IncusRecord): IncusAwaitableOperation;
+  migrate(request: IncusRecord): IncusAwaitableOperation;
+  remove(): IncusAwaitableOperation;
+  rebuild(request: IncusRecord): IncusAwaitableOperation;
   rebuildFromImage(
     source: IncusImageClient,
     image: IncusRecord,
     request: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  restore(snapshotName: string, options?: { stateful?: boolean }): Promise<IncusOperation>;
+  restore(snapshotName: string, options?: { stateful?: boolean }): IncusAwaitableOperation;
   state(): Promise<IncusEntity<IncusRecord>>;
-  setState(state: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
+  setState(state: IncusRecord, options?: IncusMutationOptions): IncusAwaitableOperation;
   access(): Promise<IncusRecord>;
   exec(request: IncusRecord, options?: InstanceExecOptions): IncusExecProcess;
   console(
     request: IncusRecord,
     options?: InstanceConsoleOptions,
-  ): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
   consoleDynamic(
     request: IncusRecord,
     options?: InstanceConsoleOptions,
@@ -424,19 +431,19 @@ export interface InstancesApi {
   names(options?: InstanceListOptions): Promise<string[] | Record<string, string[]>>;
   list(options?: InstanceListOptions): Promise<IncusRecord[]>;
   instance(name: string): InstanceApi;
-  create(instance: IncusRecord): Promise<IncusOperation>;
+  create(instance: IncusRecord): IncusAwaitableOperation;
   createFromImage(
     source: IncusImageClient,
     image: IncusRecord,
     request: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  createFromBackup(args: IncusRecord): Promise<IncusOperation>;
+  createFromBackup(args: IncusRecord): IncusAwaitableOperation;
   copyFrom(
     source: IncusClient,
     instance: IncusRecord,
     options?: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  updateMany(state: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
+  updateMany(state: IncusRecord, options?: IncusMutationOptions): IncusAwaitableOperation;
 }
 
 export interface EventsApi {
@@ -598,7 +605,7 @@ export interface ProjectsApi {
   access(name: string): Promise<IncusRecord>;
   create(project: IncusRecord): Promise<void>;
   update(name: string, project: IncusRecord, options?: IncusMutationOptions): Promise<void>;
-  rename(name: string, project: IncusRecord): Promise<IncusOperation>;
+  rename(name: string, project: IncusRecord): IncusAwaitableOperation;
   remove(name: string): Promise<void>;
   removeForce(name: string): Promise<void>;
 }
@@ -633,8 +640,8 @@ export interface StorageBucketKeysApi {
 }
 
 export interface StorageBucketBackupsApi {
-  create(poolName: string, bucketName: string, backup: IncusRecord): Promise<IncusOperation>;
-  remove(poolName: string, bucketName: string, name: string): Promise<IncusOperation>;
+  create(poolName: string, bucketName: string, backup: IncusRecord): IncusAwaitableOperation;
+  remove(poolName: string, bucketName: string, name: string): IncusAwaitableOperation;
   download(poolName: string, bucketName: string, name: string): Promise<ReadableStream<Uint8Array>>;
   upload(
     poolName: string,
@@ -642,7 +649,7 @@ export interface StorageBucketBackupsApi {
     backup: IncusRecord,
     body: IncusBinaryInput,
   ): Promise<void>;
-  createFromBackup(poolName: string, args: IncusRecord): Promise<IncusOperation>;
+  createFromBackup(poolName: string, args: IncusRecord): IncusAwaitableOperation;
 }
 
 export interface StorageBucketsApi {
@@ -703,14 +710,14 @@ export interface StorageVolumeSnapshotsApi {
     volumeType: string,
     volumeName: string,
     request: IncusRecord,
-  ): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
   rename(
     poolName: string,
     volumeType: string,
     volumeName: string,
     snapshotName: string,
     request: IncusRecord,
-  ): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
   update(
     poolName: string,
     volumeType: string,
@@ -724,21 +731,21 @@ export interface StorageVolumeSnapshotsApi {
     volumeType: string,
     volumeName: string,
     snapshotName: string,
-  ): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
 }
 
 export interface StorageVolumeBackupsApi {
   names(poolName: string, volumeName: string): Promise<string[]>;
   list(poolName: string, volumeName: string): Promise<IncusRecord[]>;
   get(poolName: string, volumeName: string, backupName: string): Promise<IncusEntity<IncusRecord>>;
-  create(poolName: string, volumeName: string, backup: IncusRecord): Promise<IncusOperation>;
+  create(poolName: string, volumeName: string, backup: IncusRecord): IncusAwaitableOperation;
   rename(
     poolName: string,
     volumeName: string,
     backupName: string,
     request: IncusRecord,
-  ): Promise<IncusOperation>;
-  remove(poolName: string, volumeName: string, backupName: string): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
+  remove(poolName: string, volumeName: string, backupName: string): IncusAwaitableOperation;
   download(
     poolName: string,
     volumeName: string,
@@ -750,8 +757,8 @@ export interface StorageVolumeBackupsApi {
     backup: IncusRecord,
     body: IncusBinaryInput,
   ): Promise<void>;
-  createFromBackup(poolName: string, args: IncusRecord): Promise<IncusOperation>;
-  createFromIso(poolName: string, args: IncusRecord): Promise<IncusOperation>;
+  createFromBackup(poolName: string, args: IncusRecord): IncusAwaitableOperation;
+  createFromIso(poolName: string, args: IncusRecord): IncusAwaitableOperation;
 }
 
 export interface StorageVolumesApi {
@@ -798,8 +805,8 @@ export interface StorageVolumesApi {
     volume: IncusRecord,
     options?: IncusRecord,
   ): Promise<IncusRemoteOperation>;
-  migrate(poolName: string, volume: IncusRecord): Promise<IncusOperation>;
-  createFromMigration(poolName: string, volume: IncusRecord): Promise<IncusOperation>;
+  migrate(poolName: string, volume: IncusRecord): IncusAwaitableOperation;
+  createFromMigration(poolName: string, volume: IncusRecord): IncusAwaitableOperation;
   snapshots: StorageVolumeSnapshotsApi;
   backups: StorageVolumeBackupsApi;
   files: StorageVolumeFilesApi;
@@ -817,11 +824,11 @@ export interface ClusterMembersApi {
   list(options?: IncusListOptions): Promise<IncusRecord[]>;
   get(name: string): Promise<IncusEntity<IncusRecord>>;
   state(name: string): Promise<IncusEntity<IncusRecord>>;
-  create(member: IncusRecord): Promise<IncusOperation>;
+  create(member: IncusRecord): IncusAwaitableOperation;
   update(name: string, member: IncusRecord, options?: IncusMutationOptions): Promise<void>;
   rename(name: string, request: IncusRecord): Promise<void>;
   remove(name: string, options?: { force?: boolean; pending?: boolean }): Promise<void>;
-  updateState(name: string, state: IncusRecord): Promise<IncusOperation>;
+  updateState(name: string, state: IncusRecord): IncusAwaitableOperation;
 }
 
 export interface ClusterGroupsApi {
@@ -836,7 +843,7 @@ export interface ClusterGroupsApi {
 
 export interface ClusterApi {
   get(): Promise<IncusEntity<IncusRecord>>;
-  update(cluster: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
+  update(cluster: IncusRecord, options?: IncusMutationOptions): IncusAwaitableOperation;
   updateCertificate(certificate: IncusRecord, options?: IncusMutationOptions): Promise<void>;
   members: ClusterMembersApi;
   groups: ClusterGroupsApi;
@@ -867,7 +874,7 @@ export interface RawApi {
     path: string,
     body?: unknown,
     options?: IncusMutationOptions,
-  ): Promise<IncusOperation>;
+  ): IncusAwaitableOperation;
 }
 
 type IncusTransportDescriptor = {
@@ -2123,6 +2130,56 @@ function createAsyncQueue<T>(): AsyncQueue<T> {
   return { iterable, push, close, fail, done };
 }
 
+function createAwaitableOperation(
+  operationReadyInput: PromiseLike<IncusOperation> | IncusOperation,
+  defaultWaitOptions: IncusOperationWaitOptions = {},
+): IncusAwaitableOperation {
+  const operationReady = Promise.resolve(operationReadyInput);
+  let operationId = "";
+  void operationReady.then((operation) => {
+    operationId = operation.id;
+  }).catch(() => {
+    // Best effort.
+  });
+
+  const wait = (options: IncusOperationWaitOptions = defaultWaitOptions) => (
+    operationReady.then((operation) => operation.wait(options))
+  );
+
+  let defaultWaitPromise: Promise<IncusRecord> | undefined;
+  const getDefaultWaitPromise = () => {
+    defaultWaitPromise ??= wait(defaultWaitOptions);
+    return defaultWaitPromise;
+  };
+
+  return {
+    get id(): string {
+      return operationId;
+    },
+    wait,
+    cancel: () => operationReady.then((operation) => operation.cancel()),
+    refresh: () => operationReady.then((operation) => operation.refresh()),
+    websocket: (secret: string) => operationReady.then((operation) => operation.websocket(secret)),
+    onUpdate: (handler: (operation: IncusRecord) => void) => (
+      operationReady.then((operation) => operation.onUpdate(handler))
+    ),
+    then: <TResult1 = IncusRecord, TResult2 = never>(
+      onFulfilled?: ((value: IncusRecord) => TResult1 | PromiseLike<TResult1>) | null,
+      onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
+    ): Promise<TResult1 | TResult2> => (
+      getDefaultWaitPromise().then(onFulfilled, onRejected)
+    ),
+    catch: <TResult = never>(
+      onRejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null,
+    ): Promise<IncusRecord | TResult> => (
+      getDefaultWaitPromise().catch(onRejected)
+    ),
+    finally: (onFinally?: (() => void) | null): Promise<IncusRecord> => (
+      getDefaultWaitPromise().finally(onFinally ?? undefined)
+    ),
+  };
+}
+
 async function webSocketDataToBytes(data: unknown): Promise<Uint8Array> {
   if (data instanceof Uint8Array) {
     return data;
@@ -2585,13 +2642,14 @@ export class IncusImageClient {
     };
   }
 
-  protected async createOperationFromRequest(
+  protected createOperationFromRequest(
     method: string,
     path: string,
     options: InternalRequestOptions = {},
-  ): Promise<IncusOperation> {
-    const result = await this.requestEnvelope(method, path, options);
-    return this.createOperationFromEnvelopeResult(method, path, result);
+  ): IncusAwaitableOperation {
+    const operationReady = this.requestEnvelope(method, path, options)
+      .then((result) => this.createOperationFromEnvelopeResult(method, path, result));
+    return createAwaitableOperation(operationReady);
   }
 
   protected createOperationFromEnvelopeResult(
@@ -2762,7 +2820,7 @@ export class IncusImageClient {
         return { value: result.value, etag: result.etag };
       },
       websocket: async (path: string) => this.openWebsocket(path, { applyContext: false }),
-      operation: async (
+      operation: (
         method: string,
         path: string,
         body?: unknown,
@@ -2901,7 +2959,7 @@ export class IncusImageClient {
         );
         return { value: toRecord(result.value), etag: result.etag };
       },
-      create: async (image: IncusRecord, upload?: IncusRecord) => {
+      create: (image: IncusRecord, upload?: IncusRecord) => {
         const body = upload ? { ...image, upload } : image;
         return this.createOperationFromRequest("POST", "/1.0/images", { body });
       },
@@ -2924,25 +2982,25 @@ export class IncusImageClient {
           },
         );
       },
-      remove: async (fingerprint: string) => {
+      remove: (fingerprint: string) => {
         return this.createOperationFromRequest(
           "DELETE",
           `/1.0/images/${encodeURIComponent(fingerprint)}`,
         );
       },
-      refresh: async (fingerprint: string) => {
+      refresh: (fingerprint: string) => {
         return this.createOperationFromRequest(
           "POST",
           `/1.0/images/${encodeURIComponent(fingerprint)}/refresh`,
         );
       },
-      createSecret: async (fingerprint: string) => {
+      createSecret: (fingerprint: string) => {
         return this.createOperationFromRequest(
           "POST",
           `/1.0/images/${encodeURIComponent(fingerprint)}/secret`,
         );
       },
-      export: async (fingerprint: string, request?: IncusRecord) => {
+      export: (fingerprint: string, request?: IncusRecord) => {
         return this.createOperationFromRequest(
           "POST",
           `/1.0/images/${encodeURIComponent(fingerprint)}/export`,
@@ -3436,7 +3494,7 @@ export class IncusClient extends IncusImageClient {
         );
         return { value: toRecord(result.value), etag: result.etag };
       },
-      create: async (snapshot: IncusRecord) => {
+      create: (snapshot: IncusRecord) => {
         return this.createOperationFromRequest("POST", toSnapshotPath(instanceName), {
           body: snapshot,
         });
@@ -3446,7 +3504,7 @@ export class IncusClient extends IncusImageClient {
         _snapshot: IncusRecord,
         _options?: IncusRecord,
       ) => createRemoteOperationFromTarget(null),
-      rename: async (snapshotName: string, request: IncusRecord) => {
+      rename: (snapshotName: string, request: IncusRecord) => {
         return this.createOperationFromRequest(
           "POST",
           toSnapshotPath(instanceName, snapshotName),
@@ -3455,7 +3513,7 @@ export class IncusClient extends IncusImageClient {
           },
         );
       },
-      migrate: async (snapshotName: string, request: IncusRecord) => {
+      migrate: (snapshotName: string, request: IncusRecord) => {
         return this.createOperationFromRequest(
           "POST",
           toSnapshotPath(instanceName, snapshotName),
@@ -3464,13 +3522,13 @@ export class IncusClient extends IncusImageClient {
           },
         );
       },
-      remove: async (snapshotName: string) => {
+      remove: (snapshotName: string) => {
         return this.createOperationFromRequest(
           "DELETE",
           toSnapshotPath(instanceName, snapshotName),
         );
       },
-      update: async (
+      update: (
         snapshotName: string,
         snapshot: IncusRecord,
         options: IncusMutationOptions = {},
@@ -3484,7 +3542,7 @@ export class IncusClient extends IncusImageClient {
           },
         );
       },
-      restore: async (snapshotName: string, options: { stateful?: boolean } = {}) => {
+      restore: (snapshotName: string, options: { stateful?: boolean } = {}) => {
         return this.createOperationFromRequest("PUT", toInstancePath(instanceName), {
           body: {
             restore: snapshotName,
@@ -3508,84 +3566,97 @@ export class IncusClient extends IncusImageClient {
       return { value: toRecord(result.value), etag: result.etag };
     };
 
-    const updateInstance = async (
+    const updateInstance = (
       instanceName: string,
       instance: IncusRecord,
       options: IncusMutationOptions = {},
-    ): Promise<IncusOperation> => {
+    ): IncusAwaitableOperation => {
       return this.createOperationFromRequest("PUT", toInstancePath(instanceName), {
         body: instance,
         etag: options.etag,
       });
     };
 
-    const forkInstance = async (
+    const forkInstance = (
       instanceName: string,
       name: string,
       options: InstanceForkOptions = {},
-    ): Promise<IncusOperation> => {
-      const source = options.fromSnapshot
-        ? `${instanceName}/${options.fromSnapshot}`
+    ): IncusAwaitableOperation => {
+      const {
+        fromSnapshot,
+        sourceProject,
+        live,
+        instanceOnly,
+        refresh,
+        refreshExcludeOlder,
+        allowInconsistent,
+      } = options;
+      const source = fromSnapshot
+        ? `${instanceName}/${fromSnapshot}`
         : instanceName;
       const sourceRequest: IncusRecord = {
         type: "copy",
         source,
       };
 
-      if (options.sourceProject) {
-        sourceRequest.project = options.sourceProject;
+      if (sourceProject) {
+        sourceRequest.project = sourceProject;
       }
 
-      if (options.live !== undefined) {
-        sourceRequest.live = options.live;
+      if (live !== undefined) {
+        sourceRequest.live = live;
       }
 
-      if (options.instanceOnly !== undefined) {
-        sourceRequest.instance_only = options.instanceOnly;
+      if (instanceOnly !== undefined) {
+        sourceRequest.instance_only = instanceOnly;
       }
 
-      if (options.refresh !== undefined) {
-        sourceRequest.refresh = options.refresh;
+      if (refresh !== undefined) {
+        sourceRequest.refresh = refresh;
       }
 
-      if (options.refreshExcludeOlder !== undefined) {
-        sourceRequest.refresh_exclude_older = options.refreshExcludeOlder;
+      if (refreshExcludeOlder !== undefined) {
+        sourceRequest.refresh_exclude_older = refreshExcludeOlder;
       }
 
-      if (options.allowInconsistent !== undefined) {
-        sourceRequest.allow_inconsistent = options.allowInconsistent;
+      if (allowInconsistent !== undefined) {
+        sourceRequest.allow_inconsistent = allowInconsistent;
       }
 
-      return this.createOperationFromRequest("POST", "/1.0/instances", {
-        body: {
-          name,
-          source: sourceRequest,
+      return this.createOperationFromRequest(
+        "POST",
+        "/1.0/instances",
+        {
+          body: {
+            name,
+            source: sourceRequest,
+          },
         },
-      });
+      );
     };
 
-    const renameInstance = async (
+    const renameInstance = (
       instanceName: string,
       request: IncusRecord,
-    ): Promise<IncusOperation> => {
+    ): IncusAwaitableOperation => {
       return this.createOperationFromRequest("POST", toInstancePath(instanceName), { body: request });
     };
 
-    const migrateInstance = async (
+    const migrateInstance = (
       instanceName: string,
       request: IncusRecord,
-    ): Promise<IncusOperation> => {
+    ): IncusAwaitableOperation => {
       return this.createOperationFromRequest("POST", toInstancePath(instanceName), { body: request });
     };
 
-    const removeInstance = async (instanceName: string): Promise<IncusOperation> => {
+    const removeInstance = (instanceName: string): IncusAwaitableOperation => {
       return this.createOperationFromRequest("DELETE", toInstancePath(instanceName));
     };
 
-    const rebuildInstance = async (
+    const rebuildInstance = (
       instanceName: string,
       request: IncusRecord,
-    ): Promise<IncusOperation> => {
+    ): IncusAwaitableOperation => {
       return this.createOperationFromRequest("POST", `${toInstancePath(instanceName)}/rebuild`, {
         body: request,
       });
@@ -3599,11 +3670,11 @@ export class IncusClient extends IncusImageClient {
       return { value: toRecord(result.value), etag: result.etag };
     };
 
-    const setStateInstance = async (
+    const setStateInstance = (
       instanceName: string,
       state: IncusRecord,
       options: IncusMutationOptions = {},
-    ): Promise<IncusOperation> => {
+    ): IncusAwaitableOperation => {
       return this.createOperationFromRequest("PUT", `${toInstancePath(instanceName)}/state`, {
         body: state,
         etag: options.etag,
@@ -3801,11 +3872,11 @@ export class IncusClient extends IncusImageClient {
       } satisfies IncusExecProcess;
     };
 
-    const consoleInstance = async (
+    const consoleInstance = (
       instanceName: string,
       request: IncusRecord,
       options?: InstanceConsoleOptions,
-    ): Promise<IncusOperation> => {
+    ): IncusAwaitableOperation => {
       return this.createOperationFromRequest(
         "POST",
         `${toInstancePath(instanceName)}/console`,
@@ -3974,7 +4045,7 @@ export class IncusClient extends IncusImageClient {
         return toRecordArray(result.value);
       },
       instance: (name: string) => createInstanceHandle(name),
-      create: async (instance: IncusRecord) => {
+      create: (instance: IncusRecord) => {
         return this.createOperationFromRequest("POST", "/1.0/instances", { body: instance });
       },
       createFromImage: async (
@@ -3982,7 +4053,7 @@ export class IncusClient extends IncusImageClient {
         _image: IncusRecord,
         _request: IncusRecord,
       ) => createRemoteOperationFromTarget(null),
-      createFromBackup: async (args: IncusRecord) => {
+      createFromBackup: (args: IncusRecord) => {
         return this.createOperationFromRequest("POST", "/1.0/instances", { body: args });
       },
       copyFrom: async (
@@ -3990,7 +4061,7 @@ export class IncusClient extends IncusImageClient {
         _instance: IncusRecord,
         _options?: IncusRecord,
       ) => createRemoteOperationFromTarget(null),
-      updateMany: async (state: IncusRecord, options: IncusMutationOptions = {}) => {
+      updateMany: (state: IncusRecord, options: IncusMutationOptions = {}) => {
         return this.createOperationFromRequest("PUT", "/1.0/instances", {
           body: state,
           etag: options.etag,

@@ -5,6 +5,8 @@ Lightweight Bun-first TypeScript client for Incus.
 The API is instance-handle oriented: get a handle with
 `client.instances.instance(name)`, then call `.exec()`, `.setState()`, `.remove()`, etc.
 
+Operation-returning calls are awaitable by default.
+
 ## Mental Model
 
 1. Connect once (`Incus.connect*`).
@@ -42,7 +44,7 @@ import { Incus } from "incus-ts";
 const client = await Incus.connectUnix();
 const name = `incus-ts-demo-${Date.now().toString(36)}`;
 
-const create = await client.instances.create({
+await client.instances.create({
   name,
   type: "container",
   source: {
@@ -53,15 +55,13 @@ const create = await client.instances.create({
     alias: "alpine/3.20",
   },
 });
-await create.wait({ timeoutSeconds: 1800 });
 ```
 
 ### 2. Start it
 
 ```ts
 const instance = client.instances.instance(name);
-const start = await instance.setState({ action: "start", timeout: 180 });
-await start.wait({ timeoutSeconds: 240 });
+await instance.setState({ action: "start", timeout: 180 });
 ```
 
 ### 3. Stream output while command is running
@@ -128,31 +128,36 @@ if (!netResult.ok || !`${stdout}\n${stderr}`.includes("__PING_OK__")) {
 const instance = client.instances.instance(name);
 
 try {
-  const stop = await instance.setState({ action: "stop", timeout: 30, force: true });
-  await stop.wait({ timeoutSeconds: 60 });
+  await instance.setState({ action: "stop", timeout: 30, force: true });
 } catch {
   // Instance might already be stopped.
 }
 
-const remove = await instance.remove();
-await remove.wait({ timeoutSeconds: 120 });
+await instance.remove();
 client.disconnect();
 ```
 
-### 6. Fork (copy) an instance
+### 6. Snapshot + restore
+
+```ts
+const instance = client.instances.instance("my-container");
+
+await instance.snapshots.create({ name: "snap0" });
+await instance.restore("snap0");
+```
+
+### 7. Fork (copy) an instance
 
 ```ts
 const source = client.instances.instance("my-container");
 
 // Clone current state
-const forkOp = await source.fork("my-container-copy");
-await forkOp.wait({ timeoutSeconds: 300 });
+await source.fork("my-container-copy");
 
 // Clone from a specific snapshot
-const forkFromSnapshotOp = await source.fork("my-container-from-snap", {
+await source.fork("my-container-from-snap", {
   fromSnapshot: "snap0",
 });
-await forkFromSnapshotOp.wait({ timeoutSeconds: 300 });
 ```
 
 ## Implemented

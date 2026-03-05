@@ -165,9 +165,9 @@ test("propagates project/target context and parses operation ids", async () => {
   const names = await client.instances.names({ type: "container" });
   expect(names).toEqual(["c1"]);
 
-  const operation = await client.instances.create({ name: "c1" });
-  expect(operation.id).toBe("op-123");
-  expect(await operation.wait()).toEqual({ done: true });
+  const operation = client.instances.create({ name: "c1" });
+  expect(typeof operation.wait).toBe("function");
+  expect(await operation).toEqual({ done: true });
 
   expect(transport.calls[0]?.options?.query).toEqual({ "instance-type": "container" });
   expect(transport.calls[0]?.options?.context).toEqual({
@@ -399,15 +399,21 @@ test("instance snapshots support lifecycle and restore", async () => {
   expect(await instance.snapshots.list()).toEqual([{ name: "snap0" }]);
   expect((await instance.snapshots.get("snap0")).value).toEqual({ name: "snap0" });
 
-  expect((await instance.snapshots.create({ name: "snap0" })).id).toBe("op-snap-create");
-  expect((await instance.snapshots.rename("snap0", { name: "snap1" })).id).toBe("op-snap-post");
-  expect((await instance.snapshots.migrate("snap0", { migration: true })).id).toBe("op-snap-post");
-  expect((await instance.snapshots.update("snap0", { expires_at: "2030-01-01T00:00:00Z" })).id)
-    .toBe("op-snap-update");
-  expect((await instance.snapshots.remove("snap0")).id).toBe("op-snap-delete");
+  const snapshotCreate = instance.snapshots.create({ name: "snap0" });
+  const snapshotRename = instance.snapshots.rename("snap0", { name: "snap1" });
+  const snapshotMigrate = instance.snapshots.migrate("snap0", { migration: true });
+  const snapshotUpdate = instance.snapshots.update("snap0", { expires_at: "2030-01-01T00:00:00Z" });
+  const snapshotRemove = instance.snapshots.remove("snap0");
+  expect(typeof snapshotCreate.wait).toBe("function");
+  expect(typeof snapshotRename.wait).toBe("function");
+  expect(typeof snapshotMigrate.wait).toBe("function");
+  expect(typeof snapshotUpdate.wait).toBe("function");
+  expect(typeof snapshotRemove.wait).toBe("function");
 
-  expect((await instance.restore("snap0")).id).toBe("op-restore");
-  expect((await instance.snapshots.restore("snap0", { stateful: true })).id).toBe("op-restore-stateful");
+  const restoreA = instance.restore("snap0");
+  const restoreB = instance.snapshots.restore("snap0", { stateful: true });
+  expect(typeof restoreA.wait).toBe("function");
+  expect(typeof restoreB.wait).toBe("function");
 
   const restoreCalls = transport.calls.filter(
     (call) => call.method.toUpperCase() === "PUT" && call.path === "/1.0/instances/c1",
@@ -416,7 +422,7 @@ test("instance snapshots support lifecycle and restore", async () => {
   expect(restoreCalls[1]?.options?.body).toEqual({ restore: "snap0", stateful: true });
 });
 
-test("instance.fork creates copy requests (including snapshot source)", async () => {
+test("instance.fork creates copy requests and supports direct await completion", async () => {
   const transport = new FakeTransport();
   transport.on("POST", "/1.0/instances", () => ({
     status: 200,
@@ -429,12 +435,25 @@ test("instance.fork creates copy requests (including snapshot source)", async ()
     },
     headers: new Headers(),
   }));
+  transport.on("GET", "/1.0/operations/op-fork/wait", () => ({
+    status: 200,
+    data: {
+      type: "sync",
+      status: "Success",
+      status_code: 200,
+      metadata: {
+        status: "Success",
+        status_code: 200,
+      },
+    },
+    headers: new Headers(),
+  }));
 
   const client = Incus.fromTransport("https://incus.example.internal", transport);
   const instance = client.instances.instance("source");
 
-  expect((await instance.fork("clone-a")).id).toBe("op-fork");
-  expect((await instance.fork("clone-b", {
+  const forkA = instance.fork("clone-a");
+  const forkB = instance.fork("clone-b", {
     fromSnapshot: "snap0",
     sourceProject: "other-project",
     live: true,
@@ -442,13 +461,28 @@ test("instance.fork creates copy requests (including snapshot source)", async ()
     refresh: true,
     refreshExcludeOlder: true,
     allowInconsistent: true,
-  })).id).toBe("op-fork");
+  });
+
+  expect(await forkA).toEqual({
+    status: "Success",
+    status_code: 200,
+  });
+  expect(await forkB).toEqual({
+    status: "Success",
+    status_code: 200,
+  });
 
   const postCalls = transport.calls.filter(
     (call) => call.method.toUpperCase() === "POST" && call.path === "/1.0/instances",
   );
+  const waitCalls = transport.calls.filter(
+    (call) => call.method.toUpperCase() === "GET" && call.path === "/1.0/operations/op-fork/wait",
+  );
 
   expect(postCalls).toHaveLength(2);
+  expect(waitCalls).toHaveLength(2);
+  expect(waitCalls[0]?.options?.query).toEqual({ timeout: -1 });
+  expect(waitCalls[1]?.options?.query).toEqual({ timeout: -1 });
   expect(postCalls[0]?.options?.body).toEqual({
     name: "clone-a",
     source: {

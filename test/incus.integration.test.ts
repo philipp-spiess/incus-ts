@@ -251,7 +251,7 @@ async function createContainer(client: IncusClient, name: string): Promise<strin
   let lastError: unknown;
   for (const candidate of candidates) {
     try {
-      const createOperation = await client.instances.create({
+      const createOperation = client.instances.create({
         name,
         type: "container",
         source: candidate.source,
@@ -339,7 +339,7 @@ integrationTest(
       expect(imageLabel.length).toBeGreaterThan(0);
 
       const startTrace = traceStart("startContainer");
-      const startOperation = await client.instances.instance(instanceName).setState({
+      const startOperation = client.instances.instance(instanceName).setState({
         action: "start",
         timeout: 180,
       });
@@ -448,7 +448,7 @@ integrationTest(
       expect(writeBefore.ok).toBe(true);
 
       const snapshotCreateTrace = traceStart("snapshot.create");
-      const snapshotCreate = await instance.snapshots.create({ name: snapshotName });
+      const snapshotCreate = instance.snapshots.create({ name: snapshotName });
       await snapshotCreate.wait({ timeoutSeconds: 180 });
       traceEnd(traceSpans, snapshotCreateTrace);
 
@@ -463,7 +463,7 @@ integrationTest(
       expect(writeAfter.ok).toBe(true);
 
       const stopForRestoreTrace = traceStart("snapshot.stopForRestore");
-      const stopForRestore = await instance.setState({
+      const stopForRestore = instance.setState({
         action: "stop",
         timeout: 120,
         force: true,
@@ -472,12 +472,12 @@ integrationTest(
       traceEnd(traceSpans, stopForRestoreTrace);
 
       const restoreTrace = traceStart("snapshot.restore");
-      const restoreOperation = await instance.restore(snapshotName);
+      const restoreOperation = instance.restore(snapshotName);
       await restoreOperation.wait({ timeoutSeconds: 180 });
       traceEnd(traceSpans, restoreTrace);
 
       const restartAfterRestoreTrace = traceStart("snapshot.restartAfterRestore");
-      const restartAfterRestore = await instance.setState({
+      const restartAfterRestore = instance.setState({
         action: "start",
         timeout: 120,
       });
