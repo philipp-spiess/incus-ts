@@ -287,3 +287,186 @@ test("instances.exec supports pipe streaming with async iterators", async () => 
     { stream: "stderr", text: "oops\n" },
   ]);
 });
+
+test("instance snapshots support lifecycle and restore", async () => {
+  const transport = new FakeTransport();
+
+  transport.on("GET", "/1.0/instances/c1/snapshots", (options) => {
+    if (String(options?.query?.recursion ?? "") === "1") {
+      return {
+        status: 200,
+        data: {
+          type: "sync",
+          status: "Success",
+          status_code: 200,
+          metadata: [{ name: "snap0" }],
+        },
+        headers: new Headers(),
+      };
+    }
+
+    return {
+      status: 200,
+      data: {
+        type: "sync",
+        status: "Success",
+        status_code: 200,
+        metadata: ["/1.0/instances/c1/snapshots/snap0"],
+      },
+      headers: new Headers(),
+    };
+  });
+
+  transport.on("GET", "/1.0/instances/c1/snapshots/snap0", () => ({
+    status: 200,
+    data: {
+      type: "sync",
+      status: "Success",
+      status_code: 200,
+      metadata: { name: "snap0" },
+    },
+    headers: new Headers(),
+  }));
+
+  transport.on("POST", "/1.0/instances/c1/snapshots", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-snap-create",
+      metadata: {},
+    },
+    headers: new Headers(),
+  }));
+
+  transport.on("POST", "/1.0/instances/c1/snapshots/snap0", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-snap-post",
+      metadata: {},
+    },
+    headers: new Headers(),
+  }));
+
+  transport.on("PUT", "/1.0/instances/c1/snapshots/snap0", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-snap-update",
+      metadata: {},
+    },
+    headers: new Headers(),
+  }));
+
+  transport.on("DELETE", "/1.0/instances/c1/snapshots/snap0", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-snap-delete",
+      metadata: {},
+    },
+    headers: new Headers(),
+  }));
+
+  transport.on("PUT", "/1.0/instances/c1", (options) => {
+    const body = options?.body as Record<string, unknown> | undefined;
+    const operationId = body?.stateful ? "op-restore-stateful" : "op-restore";
+    return {
+      status: 200,
+      data: {
+        type: "async",
+        status: "Operation created",
+        status_code: 100,
+        operation: `/1.0/operations/${operationId}`,
+        metadata: {},
+      },
+      headers: new Headers(),
+    };
+  });
+
+  const client = Incus.fromTransport("https://incus.example.internal", transport);
+  const instance = client.instances.instance("c1");
+
+  expect(await instance.snapshots.names()).toEqual(["snap0"]);
+  expect(await instance.snapshots.list()).toEqual([{ name: "snap0" }]);
+  expect((await instance.snapshots.get("snap0")).value).toEqual({ name: "snap0" });
+
+  expect((await instance.snapshots.create({ name: "snap0" })).id).toBe("op-snap-create");
+  expect((await instance.snapshots.rename("snap0", { name: "snap1" })).id).toBe("op-snap-post");
+  expect((await instance.snapshots.migrate("snap0", { migration: true })).id).toBe("op-snap-post");
+  expect((await instance.snapshots.update("snap0", { expires_at: "2030-01-01T00:00:00Z" })).id)
+    .toBe("op-snap-update");
+  expect((await instance.snapshots.remove("snap0")).id).toBe("op-snap-delete");
+
+  expect((await instance.restore("snap0")).id).toBe("op-restore");
+  expect((await instance.snapshots.restore("snap0", { stateful: true })).id).toBe("op-restore-stateful");
+
+  const restoreCalls = transport.calls.filter(
+    (call) => call.method.toUpperCase() === "PUT" && call.path === "/1.0/instances/c1",
+  );
+  expect(restoreCalls[0]?.options?.body).toEqual({ restore: "snap0" });
+  expect(restoreCalls[1]?.options?.body).toEqual({ restore: "snap0", stateful: true });
+});
+
+test("instance.fork creates copy requests (including snapshot source)", async () => {
+  const transport = new FakeTransport();
+  transport.on("POST", "/1.0/instances", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-fork",
+      metadata: {},
+    },
+    headers: new Headers(),
+  }));
+
+  const client = Incus.fromTransport("https://incus.example.internal", transport);
+  const instance = client.instances.instance("source");
+
+  expect((await instance.fork("clone-a")).id).toBe("op-fork");
+  expect((await instance.fork("clone-b", {
+    fromSnapshot: "snap0",
+    sourceProject: "other-project",
+    live: true,
+    instanceOnly: true,
+    refresh: true,
+    refreshExcludeOlder: true,
+    allowInconsistent: true,
+  })).id).toBe("op-fork");
+
+  const postCalls = transport.calls.filter(
+    (call) => call.method.toUpperCase() === "POST" && call.path === "/1.0/instances",
+  );
+
+  expect(postCalls).toHaveLength(2);
+  expect(postCalls[0]?.options?.body).toEqual({
+    name: "clone-a",
+    source: {
+      type: "copy",
+      source: "source",
+    },
+  });
+  expect(postCalls[1]?.options?.body).toEqual({
+    name: "clone-b",
+    source: {
+      type: "copy",
+      source: "source/snap0",
+      project: "other-project",
+      live: true,
+      instance_only: true,
+      refresh: true,
+      refresh_exclude_older: true,
+      allow_inconsistent: true,
+    },
+  });
+});

@@ -264,6 +264,16 @@ export type InstanceExecOptions = {
   onControl?: (socket: WebSocket) => void;
 };
 
+export type InstanceForkOptions = {
+  fromSnapshot?: string;
+  sourceProject?: string;
+  live?: boolean;
+  instanceOnly?: boolean;
+  refresh?: boolean;
+  refreshExcludeOlder?: boolean;
+  allowInconsistent?: boolean;
+};
+
 export type IncusExecOutputChunk = {
   stream: "stdout" | "stderr";
   chunk: Uint8Array;
@@ -359,6 +369,7 @@ export interface InstanceSnapshotsApi {
     snapshot: IncusRecord,
     options?: IncusMutationOptions,
   ): Promise<IncusOperation>;
+  restore(name: string, options?: { stateful?: boolean }): Promise<IncusOperation>;
 }
 
 export interface InstanceBackupsApi {
@@ -375,6 +386,7 @@ export interface InstanceBackupsApi {
 export interface InstanceApi {
   readonly name: string;
   get(options?: { full?: boolean }): Promise<IncusEntity<IncusRecord>>;
+  fork(name: string, options?: InstanceForkOptions): Promise<IncusOperation>;
   update(instance: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
   rename(request: IncusRecord): Promise<IncusOperation>;
   migrate(request: IncusRecord): Promise<IncusOperation>;
@@ -385,6 +397,7 @@ export interface InstanceApi {
     image: IncusRecord,
     request: IncusRecord,
   ): Promise<IncusRemoteOperation>;
+  restore(snapshotName: string, options?: { stateful?: boolean }): Promise<IncusOperation>;
   state(): Promise<IncusEntity<IncusRecord>>;
   setState(state: IncusRecord, options?: IncusMutationOptions): Promise<IncusOperation>;
   access(): Promise<IncusRecord>;
@@ -3268,6 +3281,11 @@ export class IncusClient extends IncusImageClient {
   private createInstancesApi(): InstancesApi {
     const toInstancePath = (instanceName: string) =>
       `/1.0/instances/${encodeURIComponent(instanceName)}`;
+    const toSnapshotPath = (instanceName: string, snapshotName?: string) => (
+      snapshotName
+        ? `${toInstancePath(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}`
+        : `${toInstancePath(instanceName)}/snapshots`
+    );
 
     const createLogsApi = (instanceName: string): InstanceLogsApi => ({
       list: async () => {
@@ -3397,6 +3415,85 @@ export class IncusClient extends IncusImageClient {
       },
     });
 
+    const createSnapshotsApi = (instanceName: string): InstanceSnapshotsApi => ({
+      names: async () => {
+        const result = await this.requestEnvelope<unknown[]>("GET", toSnapshotPath(instanceName));
+        return urlsToResourceNames(
+          `/instances/${encodeURIComponent(instanceName)}/snapshots`,
+          toStringArray(result.value),
+        );
+      },
+      list: async () => {
+        const result = await this.requestEnvelope<IncusRecord[]>("GET", toSnapshotPath(instanceName), {
+          query: { recursion: 1 },
+        });
+        return toRecordArray(result.value);
+      },
+      get: async (snapshotName: string) => {
+        const result = await this.requestEnvelope<IncusRecord>(
+          "GET",
+          toSnapshotPath(instanceName, snapshotName),
+        );
+        return { value: toRecord(result.value), etag: result.etag };
+      },
+      create: async (snapshot: IncusRecord) => {
+        return this.createOperationFromRequest("POST", toSnapshotPath(instanceName), {
+          body: snapshot,
+        });
+      },
+      copyFrom: async (
+        _source: IncusClient,
+        _snapshot: IncusRecord,
+        _options?: IncusRecord,
+      ) => createRemoteOperationFromTarget(null),
+      rename: async (snapshotName: string, request: IncusRecord) => {
+        return this.createOperationFromRequest(
+          "POST",
+          toSnapshotPath(instanceName, snapshotName),
+          {
+            body: request,
+          },
+        );
+      },
+      migrate: async (snapshotName: string, request: IncusRecord) => {
+        return this.createOperationFromRequest(
+          "POST",
+          toSnapshotPath(instanceName, snapshotName),
+          {
+            body: request,
+          },
+        );
+      },
+      remove: async (snapshotName: string) => {
+        return this.createOperationFromRequest(
+          "DELETE",
+          toSnapshotPath(instanceName, snapshotName),
+        );
+      },
+      update: async (
+        snapshotName: string,
+        snapshot: IncusRecord,
+        options: IncusMutationOptions = {},
+      ) => {
+        return this.createOperationFromRequest(
+          "PUT",
+          toSnapshotPath(instanceName, snapshotName),
+          {
+            body: snapshot,
+            etag: options.etag,
+          },
+        );
+      },
+      restore: async (snapshotName: string, options: { stateful?: boolean } = {}) => {
+        return this.createOperationFromRequest("PUT", toInstancePath(instanceName), {
+          body: {
+            restore: snapshotName,
+            ...(options.stateful !== undefined ? { stateful: options.stateful } : {}),
+          },
+        });
+      },
+    });
+
     const getInstance = async (
       instanceName: string,
       options: { full?: boolean } = {},
@@ -3419,6 +3516,51 @@ export class IncusClient extends IncusImageClient {
       return this.createOperationFromRequest("PUT", toInstancePath(instanceName), {
         body: instance,
         etag: options.etag,
+      });
+    };
+
+    const forkInstance = async (
+      instanceName: string,
+      name: string,
+      options: InstanceForkOptions = {},
+    ): Promise<IncusOperation> => {
+      const source = options.fromSnapshot
+        ? `${instanceName}/${options.fromSnapshot}`
+        : instanceName;
+      const sourceRequest: IncusRecord = {
+        type: "copy",
+        source,
+      };
+
+      if (options.sourceProject) {
+        sourceRequest.project = options.sourceProject;
+      }
+
+      if (options.live !== undefined) {
+        sourceRequest.live = options.live;
+      }
+
+      if (options.instanceOnly !== undefined) {
+        sourceRequest.instance_only = options.instanceOnly;
+      }
+
+      if (options.refresh !== undefined) {
+        sourceRequest.refresh = options.refresh;
+      }
+
+      if (options.refreshExcludeOlder !== undefined) {
+        sourceRequest.refresh_exclude_older = options.refreshExcludeOlder;
+      }
+
+      if (options.allowInconsistent !== undefined) {
+        sourceRequest.allow_inconsistent = options.allowInconsistent;
+      }
+
+      return this.createOperationFromRequest("POST", "/1.0/instances", {
+        body: {
+          name,
+          source: sourceRequest,
+        },
       });
     };
 
@@ -3710,46 +3852,58 @@ export class IncusClient extends IncusImageClient {
       return toReadableStream(result.value);
     };
 
-    const createInstanceHandle = (instanceName: string): InstanceApi => ({
-      name: instanceName,
-      get: (options = {}) => getInstance(instanceName, options),
-      update: (instance: IncusRecord, options: IncusMutationOptions = {}) => (
-        updateInstance(instanceName, instance, options)
-      ),
-      rename: (request: IncusRecord) => renameInstance(instanceName, request),
-      migrate: (request: IncusRecord) => migrateInstance(instanceName, request),
-      remove: () => removeInstance(instanceName),
-      rebuild: (request: IncusRecord) => rebuildInstance(instanceName, request),
-      rebuildFromImage: async (
-        _source: IncusImageClient,
-        _image: IncusRecord,
-        _request: IncusRecord,
-      ) => createRemoteOperationFromTarget(null),
-      state: () => stateInstance(instanceName),
-      setState: (state: IncusRecord, options: IncusMutationOptions = {}) => (
-        setStateInstance(instanceName, state, options)
-      ),
-      access: () => accessInstance(instanceName),
-      exec: (request: IncusRecord, options?: InstanceExecOptions) => (
-        execInstance(instanceName, request, options)
-      ),
-      console: (request: IncusRecord, options?: InstanceConsoleOptions) => (
-        consoleInstance(instanceName, request, options)
-      ),
-      consoleDynamic: async () => {
-        throw new Error("[Incus.ts] Dynamic console attach is not implemented yet");
-      },
-      metadata: () => metadataInstance(instanceName),
-      updateMetadata: (metadata: IncusRecord, options: IncusMutationOptions = {}) => (
-        updateMetadataInstance(instanceName, metadata, options)
-      ),
-      debugMemory: (format = "elf") => debugMemoryInstance(instanceName, format),
-      logs: createLogsApi(instanceName),
-      files: createFilesApi(instanceName),
-      templates: createNotImplementedProxy(["instances", "templates"]) as InstanceTemplatesApi,
-      snapshots: createNotImplementedProxy(["instances", "snapshots"]) as InstanceSnapshotsApi,
-      backups: createNotImplementedProxy(["instances", "backups"]) as InstanceBackupsApi,
-    });
+    const createInstanceHandle = (instanceName: string): InstanceApi => {
+      const logs = createLogsApi(instanceName);
+      const files = createFilesApi(instanceName);
+      const snapshots = createSnapshotsApi(instanceName);
+
+      return {
+        name: instanceName,
+        get: (options = {}) => getInstance(instanceName, options),
+        fork: (name: string, options: InstanceForkOptions = {}) => (
+          forkInstance(instanceName, name, options)
+        ),
+        update: (instance: IncusRecord, options: IncusMutationOptions = {}) => (
+          updateInstance(instanceName, instance, options)
+        ),
+        rename: (request: IncusRecord) => renameInstance(instanceName, request),
+        migrate: (request: IncusRecord) => migrateInstance(instanceName, request),
+        remove: () => removeInstance(instanceName),
+        rebuild: (request: IncusRecord) => rebuildInstance(instanceName, request),
+        rebuildFromImage: async (
+          _source: IncusImageClient,
+          _image: IncusRecord,
+          _request: IncusRecord,
+        ) => createRemoteOperationFromTarget(null),
+        restore: (snapshotName: string, options: { stateful?: boolean } = {}) => (
+          snapshots.restore(snapshotName, options)
+        ),
+        state: () => stateInstance(instanceName),
+        setState: (state: IncusRecord, options: IncusMutationOptions = {}) => (
+          setStateInstance(instanceName, state, options)
+        ),
+        access: () => accessInstance(instanceName),
+        exec: (request: IncusRecord, options?: InstanceExecOptions) => (
+          execInstance(instanceName, request, options)
+        ),
+        console: (request: IncusRecord, options?: InstanceConsoleOptions) => (
+          consoleInstance(instanceName, request, options)
+        ),
+        consoleDynamic: async () => {
+          throw new Error("[Incus.ts] Dynamic console attach is not implemented yet");
+        },
+        metadata: () => metadataInstance(instanceName),
+        updateMetadata: (metadata: IncusRecord, options: IncusMutationOptions = {}) => (
+          updateMetadataInstance(instanceName, metadata, options)
+        ),
+        debugMemory: (format = "elf") => debugMemoryInstance(instanceName, format),
+        logs,
+        files,
+        templates: createNotImplementedProxy(["instances", "templates"]) as InstanceTemplatesApi,
+        snapshots,
+        backups: createNotImplementedProxy(["instances", "backups"]) as InstanceBackupsApi,
+      };
+    };
 
     return createApiWithFallback<InstancesApi>("instances", {
       names: async (options = {}) => {

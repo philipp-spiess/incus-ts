@@ -430,6 +430,70 @@ integrationTest(
       traceEnd(traceSpans, networkTrace);
       const networkOutput = `${network.stdout}\n${network.stderr}`;
       expect(networkOutput).toContain("__PING_OK__");
+
+      const instance = client.instances.instance(instanceName);
+      const snapshotName = `snap-${Date.now().toString(36)}`;
+      const snapshotFile = "/root/incus-ts-snapshot-state.txt";
+      const beforeValue = `before-${Date.now().toString(36)}`;
+      const afterValue = `after-${Date.now().toString(36)}`;
+
+      const snapshotWriteBeforeTrace = traceStart("snapshot.writeBefore");
+      const writeBefore = await instance.exec(
+        {
+          command: ["sh", "-lc", `printf '%s' '${beforeValue}' > ${snapshotFile}`],
+          interactive: false,
+        },
+      ).waitResult({ timeoutSeconds: 120 });
+      traceEnd(traceSpans, snapshotWriteBeforeTrace);
+      expect(writeBefore.ok).toBe(true);
+
+      const snapshotCreateTrace = traceStart("snapshot.create");
+      const snapshotCreate = await instance.snapshots.create({ name: snapshotName });
+      await snapshotCreate.wait({ timeoutSeconds: 180 });
+      traceEnd(traceSpans, snapshotCreateTrace);
+
+      const snapshotWriteAfterTrace = traceStart("snapshot.writeAfter");
+      const writeAfter = await instance.exec(
+        {
+          command: ["sh", "-lc", `printf '%s' '${afterValue}' > ${snapshotFile}`],
+          interactive: false,
+        },
+      ).waitResult({ timeoutSeconds: 120 });
+      traceEnd(traceSpans, snapshotWriteAfterTrace);
+      expect(writeAfter.ok).toBe(true);
+
+      const stopForRestoreTrace = traceStart("snapshot.stopForRestore");
+      const stopForRestore = await instance.setState({
+        action: "stop",
+        timeout: 120,
+        force: true,
+      });
+      await stopForRestore.wait({ timeoutSeconds: 180 });
+      traceEnd(traceSpans, stopForRestoreTrace);
+
+      const restoreTrace = traceStart("snapshot.restore");
+      const restoreOperation = await instance.restore(snapshotName);
+      await restoreOperation.wait({ timeoutSeconds: 180 });
+      traceEnd(traceSpans, restoreTrace);
+
+      const restartAfterRestoreTrace = traceStart("snapshot.restartAfterRestore");
+      const restartAfterRestore = await instance.setState({
+        action: "start",
+        timeout: 120,
+      });
+      await restartAfterRestore.wait({ timeoutSeconds: 180 });
+      traceEnd(traceSpans, restartAfterRestoreTrace);
+
+      const snapshotVerifyTrace = traceStart("snapshot.verify");
+      const restoredState = await execAndCapture(
+        client,
+        instanceName,
+        ["sh", "-lc", `cat ${snapshotFile}`],
+        60,
+      );
+      traceEnd(traceSpans, snapshotVerifyTrace);
+      expect(restoredState.stdout).toContain(beforeValue);
+      expect(restoredState.stdout).not.toContain(afterValue);
     } finally {
       const cleanupTrace = traceStart("cleanup.forceDelete");
       if (created) {

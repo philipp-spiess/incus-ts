@@ -139,12 +139,29 @@ await remove.wait({ timeoutSeconds: 120 });
 client.disconnect();
 ```
 
+### 6. Fork (copy) an instance
+
+```ts
+const source = client.instances.instance("my-container");
+
+// Clone current state
+const forkOp = await source.fork("my-container-copy");
+await forkOp.wait({ timeoutSeconds: 300 });
+
+// Clone from a specific snapshot
+const forkFromSnapshotOp = await source.fork("my-container-from-snap", {
+  fromSnapshot: "snap0",
+});
+await forkFromSnapshotOp.wait({ timeoutSeconds: 300 });
+```
+
 ## Implemented
 
 - `connection`, `raw`, `server`, `operations`
 - `images` + `images.aliases` (simple-streams runtime methods are still scaffolded)
 - `instances` collection + instance handles (`instances.instance(name)`) with:
   - CRUD/state
+  - snapshots (`create`, `list`, `get`, `update`, `rename`, `remove`, `restore`)
   - `exec` (Unix-socket websocket attach, async streaming, promise-style completion)
   - `logs`, `files`, `metadata`, `console`
 
@@ -153,7 +170,7 @@ client.disconnect();
 - `certificates`, `events`
 - `networks`, `profiles`, `projects`
 - `storage`, `cluster`, `warnings`
-- `instances.templates`, `instances.snapshots`, `instances.backups`
+- `instances.templates`, `instances.backups`
 
 ## Bun Scripts
 
