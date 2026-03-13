@@ -2274,20 +2274,33 @@ function streamWebSocketToWritable(
 
 async function sendToWebSocket(socket: WebSocketLike, data: Uint8Array): Promise<void> {
   if (isNodeWebSocket(socket)) {
-    await new Promise<void>((resolve, reject) => {
-      (socket as unknown as {
-        send: (
-          payload: Uint8Array,
-          callback: (error?: Error) => void,
-        ) => void;
-      }).send(data, (error?: Error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+    const send = (socket as unknown as {
+      send: (
+        payload: Uint8Array,
+        callback?: (error?: Error) => void,
+      ) => void;
+    }).send;
 
-        resolve();
-      });
+    // Unix-socket websocket shims expose a synchronous `send(data)` API, while
+    // libraries like `ws` use the callback form to signal flush completion.
+    if (send.length < 2) {
+      send.call(socket, data);
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      try {
+        send.call(socket, data, (error?: Error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
+        });
+      } catch (error) {
+        reject(error);
+      }
     });
     return;
   }

@@ -67,6 +67,8 @@ class FakeTransport implements IncusTransport {
 
 class FakeWebSocket {
   private readonly events = new EventEmitter();
+  readonly sentMessages: unknown[] = [];
+  closedCount = 0;
 
   on(type: string, listener: (...args: unknown[]) => void) {
     this.events.on(type, listener);
@@ -76,11 +78,12 @@ class FakeWebSocket {
     this.events.off(type, listener);
   }
 
-  send(_data: unknown) {
-    // No-op for tests.
+  send(data: unknown) {
+    this.sentMessages.push(data);
   }
 
   close() {
+    this.closedCount += 1;
     this.events.emit("close");
   }
 
@@ -286,6 +289,72 @@ test("instances.exec supports pipe streaming with async iterators", async () => 
     { stream: "stdout", text: "hello\n" },
     { stream: "stderr", text: "oops\n" },
   ]);
+});
+
+test("instances.exec keeps streaming stdin over callback-less node-style websockets", async () => {
+  const transport = new FakeTransport();
+  const stdinSocket = new FakeWebSocket();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let stdinController: ReadableStreamDefaultController<Uint8Array> | undefined;
+
+  transport.on("POST", "/1.0/instances/c1/exec", () => ({
+    status: 200,
+    data: {
+      type: "async",
+      status: "Operation created",
+      status_code: 100,
+      operation: "/1.0/operations/op-exec-stdin",
+      metadata: {
+        fds: {
+          "0": "sec-in",
+        },
+      },
+    },
+    headers: new Headers(),
+  }));
+  transport.onWebsocket("/1.0/operations/op-exec-stdin/websocket?secret=sec-in", () => (
+    stdinSocket as unknown as WebSocket
+  ));
+
+  const stdin = new ReadableStream<Uint8Array>({
+    start(controller) {
+      stdinController = controller;
+    },
+  });
+
+  const client = Incus.fromTransport("https://incus.example.internal", transport);
+  const proc = client.instances.instance("c1").exec(
+    { command: ["/bin/cat"] },
+    { stdin },
+  );
+
+  for (let attempt = 0; attempt < 20 && proc.id.length === 0; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  expect(proc.id).toBe("op-exec-stdin");
+
+  stdinController?.enqueue(encoder.encode("{\"jsonrpc\":\"2.0\",\"id\":1}\n"));
+  stdinController?.enqueue(encoder.encode("{\"jsonrpc\":\"2.0\",\"id\":2}\n"));
+  stdinController?.close();
+
+  for (
+    let attempt = 0;
+    attempt < 20 && (stdinSocket.sentMessages.length < 2 || stdinSocket.closedCount === 0);
+    attempt += 1
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+
+  expect(
+    stdinSocket.sentMessages.map((message) => (
+      decoder.decode(Buffer.from(message as Uint8Array))
+    )),
+  ).toEqual([
+    "{\"jsonrpc\":\"2.0\",\"id\":1}\n",
+    "{\"jsonrpc\":\"2.0\",\"id\":2}\n",
+  ]);
+  expect(stdinSocket.closedCount).toBeGreaterThan(0);
 });
 
 test("instance snapshots support lifecycle and restore", async () => {
