@@ -1,6 +1,6 @@
 {
   "name": "incus-ts",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Lightweight TypeScript API for Incus",
   "repository": {
     "type": "git",
