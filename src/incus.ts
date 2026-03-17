@@ -3062,7 +3062,7 @@ export class IncusClient extends IncusImageClient {
         return toRecord(result.value);
       },
     });
-    this.networks = createNotImplementedProxy(["networks"]) as NetworksApi;
+    this.networks = this.createNetworksApi();
     this.operations = this.createOperationsApi();
     this.profiles = createNotImplementedProxy(["profiles"]) as ProfilesApi;
     this.projects = createNotImplementedProxy(["projects"]) as ProjectsApi;
@@ -3210,6 +3210,164 @@ export class IncusClient extends IncusImageClient {
           `/1.0/operations/${encodeURIComponent(uuid)}`,
         );
       },
+    });
+  }
+
+  private createNetworkAclsApi(): NetworkAclsApi {
+    const toNetworkAclPath = (name?: string) => (
+      name
+        ? `/1.0/network-acls/${encodeURIComponent(name)}`
+        : "/1.0/network-acls"
+    );
+
+    return createApiWithFallback<NetworkAclsApi>("networks.acls", {
+      names: async () => {
+        const result = await this.requestEnvelope<unknown[]>("GET", "/1.0/network-acls");
+        return urlsToResourceNames("/network-acls", toStringArray(result.value));
+      },
+      list: async (options = {}) => {
+        const result = await this.requestEnvelope<IncusRecord[]>(
+          "GET",
+          "/1.0/network-acls",
+          {
+            query: {
+              recursion: 1,
+              "all-projects": options.allProjects ? "true" : undefined,
+            },
+          },
+        );
+        return toRecordArray(result.value);
+      },
+      get: async (name: string) => {
+        const result = await this.requestEnvelope<IncusRecord>(
+          "GET",
+          toNetworkAclPath(name),
+        );
+        return { value: toRecord(result.value), etag: result.etag };
+      },
+      getLog: async (name: string) => {
+        const result = await this.requestBinary(
+          "GET",
+          `${toNetworkAclPath(name)}/log`,
+        );
+        return toReadableStream(result.value);
+      },
+      create: async (request: IncusRecord) => {
+        await this.requestEnvelope("POST", "/1.0/network-acls", { body: request });
+      },
+      update: async (
+        name: string,
+        request: IncusRecord,
+        options: IncusMutationOptions = {},
+      ) => {
+        await this.requestEnvelope("PUT", toNetworkAclPath(name), {
+          body: request,
+          etag: options.etag,
+        });
+      },
+      rename: async (name: string, request: IncusRecord) => {
+        await this.requestEnvelope("POST", toNetworkAclPath(name), { body: request });
+      },
+      remove: async (name: string) => {
+        await this.requestEnvelope("DELETE", toNetworkAclPath(name));
+      },
+    });
+  }
+
+  private createNetworksApi(): NetworksApi {
+    const toNetworkPath = (networkName?: string) => (
+      networkName
+        ? `/1.0/networks/${encodeURIComponent(networkName)}`
+        : "/1.0/networks"
+    );
+
+    return createApiWithFallback<NetworksApi>("networks", {
+      names: async () => {
+        const result = await this.requestEnvelope<unknown[]>("GET", "/1.0/networks");
+        return urlsToResourceNames("/networks", toStringArray(result.value));
+      },
+      list: async (options = {}) => {
+        const query: Record<string, string | number | boolean | undefined> = {
+          recursion: 1,
+          "all-projects": options.allProjects ? "true" : undefined,
+        };
+
+        if (options.filter && options.filter.length > 0) {
+          query.filter = parseFilters(options.filter);
+        }
+
+        const result = await this.requestEnvelope<IncusRecord[]>(
+          "GET",
+          "/1.0/networks",
+          { query },
+        );
+        return toRecordArray(result.value);
+      },
+      get: async (name: string) => {
+        const result = await this.requestEnvelope<IncusRecord>(
+          "GET",
+          toNetworkPath(name),
+        );
+        return { value: toRecord(result.value), etag: result.etag };
+      },
+      leases: async (name: string) => {
+        const result = await this.requestEnvelope<IncusRecord[]>(
+          "GET",
+          `${toNetworkPath(name)}/leases`,
+        );
+        return toRecordArray(result.value);
+      },
+      state: async (name: string) => {
+        const result = await this.requestEnvelope<IncusRecord>(
+          "GET",
+          `${toNetworkPath(name)}/state`,
+        );
+        return toRecord(result.value);
+      },
+      allocations: async (options = {}) => {
+        const result = await this.requestEnvelope<IncusRecord[]>(
+          "GET",
+          "/1.0/network-allocations",
+          {
+            query: {
+              "all-projects": options.allProjects ? "true" : undefined,
+            },
+          },
+        );
+        return toRecordArray(result.value);
+      },
+      create: async (request: IncusRecord) => {
+        await this.requestEnvelope("POST", "/1.0/networks", { body: request });
+      },
+      update: async (
+        name: string,
+        request: IncusRecord,
+        options: IncusMutationOptions = {},
+      ) => {
+        await this.requestEnvelope("PUT", toNetworkPath(name), {
+          body: request,
+          etag: options.etag,
+        });
+      },
+      rename: async (name: string, request: IncusRecord) => {
+        await this.requestEnvelope("POST", toNetworkPath(name), { body: request });
+      },
+      remove: async (name: string) => {
+        await this.requestEnvelope("DELETE", toNetworkPath(name));
+      },
+      forwards: createNotImplementedProxy(["networks", "forwards"]) as NetworkForwardsApi,
+      loadBalancers: createNotImplementedProxy(
+        ["networks", "loadBalancers"],
+      ) as NetworkLoadBalancersApi,
+      peers: createNotImplementedProxy(["networks", "peers"]) as NetworkPeersApi,
+      acls: this.createNetworkAclsApi(),
+      addressSets: createNotImplementedProxy(
+        ["networks", "addressSets"],
+      ) as NetworkAddressSetsApi,
+      zones: createNotImplementedProxy(["networks", "zones"]) as NetworkZonesApi,
+      integrations: createNotImplementedProxy(
+        ["networks", "integrations"],
+      ) as NetworkIntegrationsApi,
     });
   }
 
