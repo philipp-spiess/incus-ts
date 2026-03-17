@@ -10,7 +10,7 @@ Operation-returning calls are awaitable by default.
 ## Mental Model
 
 1. Connect once (`Incus.connect*`).
-2. Use collection APIs for listing/creating (`client.instances.*`).
+2. Use collection APIs for listing/creating (`client.instances.*`, `client.networks.*`).
 3. Use a per-instance handle for day-to-day work (`client.instances.instance(name)`).
 
 ## Quick Start
@@ -160,6 +160,86 @@ await source.fork("my-container-from-snap", {
 });
 ```
 
+### 8. Discover networks and inspect runtime state
+
+```ts
+const networks = await client.networks.list({ filter: ["type=bridge"] });
+const network = await client.networks.get("incusbr0");
+const state = await client.networks.state("incusbr0");
+
+console.log(networks.map((entry) => entry.name));
+console.log(network.value.type);
+console.log(state.addresses);
+```
+
+### 9. Create and update an OVN network
+
+`networks.update()` follows the rest of the client and performs a `PUT`, so
+read the current object first if you want to preserve existing fields.
+
+```ts
+const name = "sandbox-ovn";
+
+await client.networks.create({
+  name,
+  type: "ovn",
+  description: "Isolated sandbox network",
+  config: {
+    network: "none",
+    "ipv4.address": "10.42.0.1/24",
+    "ipv4.dhcp": "true",
+    "ipv4.dhcp.gateway": "10.42.0.2",
+    "dns.nameservers": "10.42.0.2",
+  },
+});
+
+const current = await client.networks.get(name);
+await client.networks.update(
+  name,
+  {
+    ...current.value,
+    description: "Isolated sandbox network for proxy-routed guests",
+  },
+  { etag: current.etag },
+);
+```
+
+### 10. Inspect allocations and leases
+
+```ts
+const allocations = await client.networks.allocations();
+const leases = await client.networks.leases("sandbox-ovn");
+
+const usedIps = allocations
+  .filter((entry) => entry.network === "sandbox-ovn")
+  .map((entry) => entry.address)
+  .filter((entry): entry is string => typeof entry === "string");
+
+console.log(usedIps);
+console.log(leases);
+```
+
+### 11. Manage network ACLs
+
+```ts
+await client.networks.acls.create({
+  name: "proxy-only",
+  description: "Only allow traffic via the local proxy appliance",
+  ingress: [],
+  egress: [],
+});
+
+const acl = await client.networks.acls.get("proxy-only");
+await client.networks.acls.update(
+  "proxy-only",
+  {
+    ...acl.value,
+    description: "Proxy-only egress policy",
+  },
+  { etag: acl.etag },
+);
+```
+
 ## Implemented
 
 - `connection`, `raw`, `server`, `operations`
@@ -169,11 +249,18 @@ await source.fork("my-container-from-snap", {
   - snapshots (`create`, `list`, `get`, `update`, `rename`, `remove`, `restore`)
   - `exec` (Unix-socket websocket attach, async streaming, promise-style completion)
   - `logs`, `files`, `metadata`, `console`
+- `networks` with:
+  - discovery (`names`, `list`, `get`, `state`)
+  - lifecycle (`create`, `update`, `rename`, `remove`)
+  - diagnostics (`allocations`, `leases`)
+  - ACLs (`networks.acls.*`, including `getLog`)
 
 ## Still Scaffolded
 
 - `certificates`, `events`
-- `networks`, `profiles`, `projects`
+- `networks.forwards`, `networks.loadBalancers`, `networks.peers`
+- `networks.addressSets`, `networks.zones`, `networks.integrations`
+- `profiles`, `projects`
 - `storage`, `cluster`, `warnings`
 - `instances.templates`, `instances.backups`
 
