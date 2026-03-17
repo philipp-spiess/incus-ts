@@ -25,6 +25,7 @@
   ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target=node --format=esm --sourcemap --emit-dce-annotations && ./node_modules/.bin/tsc --project tsconfig.build.json",
+    "prepublishOnly": "bun run build",
     "typecheck": "./node_modules/.bin/tsc --noEmit",
     "test": "bun test ./test",
     "test:e2e": "INCUS_E2E=1 bun test ./test/incus.integration.test.ts",
